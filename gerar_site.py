@@ -32,7 +32,7 @@ MESES = ("", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
 
 
 def config():
-    padrao = {"base_url": "", "form_embed_url": ""}
+    padrao = {"base_url": "", "base_path": "", "form_embed_url": ""}
     if os.path.exists(ARQ_CONFIG):
         with open(ARQ_CONFIG, encoding="utf-8") as f:
             padrao.update(json.load(f))
@@ -101,7 +101,8 @@ def bloco_formulario(cfg):
 
 def pagina(cfg, snapshot, corpo, titulo, descricao, caminho):
     base = template("base.html")
-    canonical = (cfg.get("base_url", "").rstrip("/") + caminho) or caminho
+    canonical = (cfg.get("base_url", "").rstrip("/")
+                 + cfg.get("base_path", "").rstrip("/") + caminho) or caminho
     html = preencher(base, {
         "titulo": esc(titulo),
         "descricao": esc(descricao),
@@ -111,6 +112,11 @@ def pagina(cfg, snapshot, corpo, titulo, descricao, caminho):
         "versao": esc(snapshot["contagens"]["versao"]),
         "formulario": bloco_formulario(cfg),
     })
+    # Em repositorio de projeto o Pages serve sob /<repo>/, entao todo link
+    # interno precisa do prefixo. Com dominio proprio, base_path fica vazio.
+    prefixo = cfg.get("base_path", "").rstrip("/")
+    if prefixo:
+        html = html.replace('href="/', f'href="{prefixo}/')
     return html
 
 
@@ -403,7 +409,8 @@ def gerar_atributos(cfg, s):
 
 
 def gerar_sitemap(cfg, caminhos, s):
-    base = cfg.get("base_url", "").rstrip("/")
+    base = (cfg.get("base_url", "").rstrip("/")
+            + cfg.get("base_path", "").rstrip("/"))
     hoje = s["data_referencia"]
     urls = "".join(
         f"<url><loc>{esc(base + c)}</loc><lastmod>{hoje}</lastmod></url>"
