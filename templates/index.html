@@ -1,0 +1,28 @@
+<span class="chapeu">Atualizado em {{data_ref}}</span>
+<h1>{{h1}}</h1>
+<p class="lede">{{lede}}</p>
+
+{{aviso}}
+
+{{tabela}}
+
+<p style="font-size:.92rem;color:var(--muted)">
+Quando um atributo hoje opcional ganha data de fim de vigência, ele passa a ser
+obrigatório naquela data. Os produtos daquela NCM que estiverem sem o atributo
+preenchido são desativados no catálogo — e produto desativado trava a DUIMP.
+</p>
+
+{{historico}}
+
+<h2>Como isso funciona</h2>
+<p>
+A Receita publica todo dia a relação completa de atributos por NCM do Catálogo de
+Produtos. Dentro desse arquivo, alguns vínculos têm <code>dataFimVigencia</code>:
+é a data em que aquele atributo deixa de ser opcional. Esta página lê o arquivo
+oficial toda manhã e mostra só essas linhas, com o nome do atributo e o órgão
+que o exige.
+</p>
+<p>
+A Notícia Siscomex avisa por NCM e em prosa. Aqui a mesma informação vem como
+lista, e você consegue cruzar com os seus SKUs.
+</p>

@@ -1,0 +1,59 @@
+name: Coletar e publicar
+
+on:
+  schedule:
+    # 09:00 UTC = 06:00 em Brasilia. O arquivo oficial e regenerado por
+    # volta de 00:0x BRT, entao as 06:00 ja pegamos a versao do dia.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "coletor.py"
+      - "gerar_site.py"
+      - "templates/**"
+      - "config.json"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Sem pip install: o coletor usa so a biblioteca padrao.
+      - name: Coletar do Portal Unico
+        run: python coletor.py
+
+      - name: Gerar o site
+        run: python gerar_site.py
+
+      - name: Commitar snapshot e site
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dados site
+          if git diff --staged --quiet; then
+            echo "Nada mudou hoje."
+          else
+            git commit -m "coleta $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
