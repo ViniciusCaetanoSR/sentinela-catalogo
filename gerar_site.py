@@ -15,10 +15,12 @@ Saida em site/:
 
 import json
 import os
+import urllib.parse
 import re
 import shutil
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from email.utils import formatdate
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 DIR_TEMPLATES = os.path.join(RAIZ, "templates")
@@ -32,7 +34,8 @@ MESES = ("", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
 
 
 def config():
-    padrao = {"base_url": "", "base_path": "", "form_embed_url": ""}
+    padrao = {"base_url": "", "base_path": "", "form_embed_url": "",
+              "contato_email": "", "goatcounter_code": ""}
     if os.path.exists(ARQ_CONFIG):
         with open(ARQ_CONFIG, encoding="utf-8") as f:
             padrao.update(json.load(f))
@@ -95,8 +98,38 @@ def bloco_formulario(cfg):
     if url:
         return (f'<iframe src="{esc(url)}" loading="lazy" '
                 f'title="Cadastro para receber os avisos"></iframe>')
-    return ('<p class="pendente">[formulário ainda não configurado — '
-            'definir form_embed_url em config.json]</p>')
+
+    email = cfg.get("contato_email")
+    if email:
+        assunto = "Quero acompanhar minhas NCMs"
+        # Sem escapes de nova linha aqui: montado por join para nao quebrar
+        # em nenhuma camada de shell ou heredoc.
+        corpo = chr(10).join([
+            "Minhas NCMs (uma por linha):", "", "", "",
+            "--",
+            "Quantos SKUs voce mantem no catalogo?",
+            "Como voce descobre hoje que um atributo vai virar obrigatorio?",
+        ])
+        href = (f"mailto:{email}"
+                f"?subject={urllib.parse.quote(assunto)}"
+                f"&body={urllib.parse.quote(corpo)}")
+        return (f'<p><a class="botao" href="{esc(href)}">'
+                f'Enviar minhas NCMs por e-mail</a></p>'
+                f'<p style="font-size:.86rem;color:var(--faint);margin-top:12px">'
+                f'Abre seu cliente de e-mail com a mensagem pronta. '
+                f'Sem cadastro e sem senha.</p>')
+
+    return ('<p class="pendente">[captura ainda não configurada — '
+            'definir contato_email ou form_embed_url em config.json]</p>')
+
+
+def bloco_analytics(cfg):
+    codigo = cfg.get("goatcounter_code")
+    if not codigo:
+        return ""
+    return ('<script data-goatcounter="'
+            f'https://{esc(codigo)}.goatcounter.com/count"'
+            ' async src="//gc.zgo.at/count.js"></script>')
 
 
 def pagina(cfg, snapshot, corpo, titulo, descricao, caminho):
@@ -111,6 +144,8 @@ def pagina(cfg, snapshot, corpo, titulo, descricao, caminho):
         "coletado_em": br(snapshot["data_referencia"]),
         "versao": esc(snapshot["contagens"]["versao"]),
         "formulario": bloco_formulario(cfg),
+        "analytics": bloco_analytics(cfg),
+        "feed": "/feed.xml",  # o prefixo de base_path e aplicado depois
     })
     # Em repositorio de projeto o Pages serve sob /<repo>/, entao todo link
     # interno precisa do prefixo. Com dominio proprio, base_path fica vazio.
@@ -408,6 +443,47 @@ def gerar_atributos(cfg, s):
     return caminhos
 
 
+def gerar_feed(cfg, s):
+    """RSS das viradas agendadas.
+
+    E a unica forma de push que este teste entrega: quem acompanha comex por
+    leitor de feed passa a ser avisado sem precisar visitar a pagina.
+    """
+    base = (cfg.get("base_url", "").rstrip("/")
+            + cfg.get("base_path", "").rstrip("/"))
+    pub = formatdate(
+        datetime.strptime(s["data_referencia"], "%Y-%m-%d")
+        .replace(tzinfo=timezone.utc).timestamp(), usegmt=True)
+
+    itens = []
+    for v in s["viradas"]:
+        titulo = (f'NCM {v["ncm"]}: {v["nome"] or v["atributo"]} '
+                  f'vira obrigatório em {br(v["vira_obrigatorio_em"])}')
+        desc = (f'O atributo {v["atributo"]} ({v["nome"] or "sem nome"}), exigido por '
+                f'{"/".join(v["orgaos"]) or "órgão não identificado"}, deixa de ser '
+                f'opcional em {por_extenso(v["vira_obrigatorio_em"])}. Produtos da NCM '
+                f'{v["ncm"]} sem ele preenchido são desativados no Catálogo de Produtos.')
+        link = f'{base}/ncm/{v["ncm"]}/'
+        guid = f'{link}#{v["atributo"]}-{v["vira_obrigatorio_em"]}'
+        itens.append(
+            f"<item><title>{esc(titulo)}</title><link>{esc(link)}</link>"
+            f"<guid isPermaLink=\"false\">{esc(guid)}</guid>"
+            f"<description>{esc(desc)}</description>"
+            f"<pubDate>{pub}</pubDate></item>")
+
+    escrever("feed.xml",
+             '<?xml version="1.0" encoding="UTF-8"?>'
+             '<rss version="2.0"><channel>'
+             '<title>Sentinela do Catálogo — viradas de atributo por NCM</title>'
+             f'<link>{esc(base)}/</link>'
+             '<description>Atributos do Catálogo de Produtos do Portal Único que '
+             'têm data marcada para virar obrigatórios.</description>'
+             '<language>pt-BR</language>'
+             f'<lastBuildDate>{pub}</lastBuildDate>'
+             f'{"".join(itens)}'
+             '</channel></rss>')
+
+
 def gerar_sitemap(cfg, caminhos, s):
     base = (cfg.get("base_url", "").rstrip("/")
             + cfg.get("base_path", "").rstrip("/"))
@@ -439,13 +515,17 @@ def main():
     caminhos += gerar_index(cfg, s)
     caminhos += gerar_ncms(cfg, s)
     caminhos += gerar_atributos(cfg, s)
+    gerar_feed(cfg, s)
     gerar_sitemap(cfg, caminhos, s)
 
     print(f"{len(caminhos)} paginas geradas em site/ "
           f"(referencia {br(s['data_referencia'])}, {len(s['viradas'])} viradas)")
-    if not cfg.get("form_embed_url"):
-        print("AVISO: form_embed_url vazio em config.json - "
-              "o bloco de captura esta como placeholder.")
+    if not (cfg.get("form_embed_url") or cfg.get("contato_email")):
+        print("AVISO: captura nao configurada - defina contato_email (mailto) ou "
+              "form_embed_url em config.json. Sem isso o teste nao produz metrica.")
+    if not cfg.get("goatcounter_code"):
+        print("AVISO: goatcounter_code vazio - sem analitica, zero cadastro nao "
+              "distingue 'ninguem quer' de 'ninguem viu'.")
     if not cfg.get("base_url"):
         print("AVISO: base_url vazio em config.json - "
               "canonical e sitemap saem com caminho relativo.")
