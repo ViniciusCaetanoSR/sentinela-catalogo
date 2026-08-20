@@ -4,7 +4,7 @@
 
 Contexto que sustenta a urgência: **13 das 14 viradas vencem em 30/08/2026**. Enquanto isso não passa, há um prazo real para apontar. Depois, o discurso vira abstrato.
 
-Substitua `SEU-LINK` pela URL final e `SEU-EMAIL` pelo endereço de contato.
+Substitua `https://viniciuscaetanosr.github.io/sentinela-catalogo/` pela URL final e `orangestripes.ai@gmail.com` pelo endereço de contato.
 
 ---
 
@@ -24,9 +24,9 @@ A única rota editorial formal encontrada. https://www.aduaneiras.com.br/sugesto
 >
 > Se for útil para a Editoria, posso escrever um artigo técnico explicando o mecanismo: onde o campo `dataFimVigencia` aparece no arquivo público, por que ele é o aviso prévio, e o que acontece com os produtos que não forem preenchidos até a data. Sem custo e sem contrapartida — a lista já é pública, só está em JSON de 16 MB.
 >
-> Dados e método abertos em SEU-LINK.
+> Dados e método abertos em https://viniciuscaetanosr.github.io/sentinela-catalogo/.
 >
-> Vinícius Caetano — SEU-EMAIL
+> Vinícius Caetano — orangestripes.ai@gmail.com
 
 ---
 
@@ -42,11 +42,11 @@ Eles publicaram a circular **CAD nº 296/26** em 18/08 com o título "Alteraçã
 >
 > Vi a circular CAD nº 296/26, sobre a alteração nos atributos do Inmetro. Sou desenvolvedor e mantenho uma extração diária da relação oficial de atributos por NCM do Portal Único.
 >
-> Para essa alteração específica, são 14 vínculos em 9 NCMs, com 13 vencendo em 30/08/2026 e um em 13/09. A relação completa, por NCM e por atributo, está em SEU-LINK e é atualizada todo dia direto do arquivo da Receita.
+> Para essa alteração específica, são 14 vínculos em 9 NCMs, com 13 vencendo em 30/08/2026 e um em 13/09. A relação completa, por NCM e por atributo, está em https://viniciuscaetanosr.github.io/sentinela-catalogo/ e é atualizada todo dia direto do arquivo da Receita.
 >
 > Ofereço a lista para uso nas circulares, sem custo e sem exigência de crédito. Se for útil ao associado, posso mandar o recorte por e-mail sempre que houver alteração nova, antes de vocês publicarem.
 >
-> Vinícius Caetano — SEU-EMAIL
+> Vinícius Caetano — orangestripes.ai@gmail.com
 
 ---
 
@@ -62,9 +62,9 @@ Eles publicaram a circular **CAD nº 296/26** em 18/08 com o título "Alteraçã
 >
 > Mantenho uma extração diária do arquivo oficial de atributos por NCM do Portal Único, que isola os vínculos com data para virar obrigatórios. Da alteração do Inmetro saem 14 vínculos em 9 NCMs, 13 deles com corte em 30/08/2026.
 >
-> Se quiserem usar a lista nos posts, ela está aberta em SEU-LINK e é regenerada todo dia. Sem custo, sem exigência de crédito.
+> Se quiserem usar a lista nos posts, ela está aberta em https://viniciuscaetanosr.github.io/sentinela-catalogo/ e é regenerada todo dia. Sem custo, sem exigência de crédito.
 >
-> Vinícius Caetano — SEU-EMAIL
+> Vinícius Caetano — orangestripes.ai@gmail.com
 
 ---
 
@@ -80,7 +80,7 @@ Seção de colunistas parada desde 02/02/2026. Custo quase zero, alcance duvidos
 >
 > Posso escrever uma coluna técnica recorrente sobre atributos por NCM — começando pela alteração do Inmetro que desativa produtos de 9 NCMs em 30/08/2026. Sem custo.
 >
-> Vinícius Caetano — SEU-EMAIL
+> Vinícius Caetano — orangestripes.ai@gmail.com
 
 ---
 
@@ -94,7 +94,7 @@ Este não depende de gatekeeper nenhum. É o único canal onde você publica sem
 >
 > Quem tiver produto classificado nessas NCMs sem o atributo preenchido vai encontrar o produto desativado — e produto desativado trava a DUIMP.
 >
-> A Notícia Siscomex avisa. Mas avisa em prosa, por NCM, e o arquivo onde a informação está estruturada tem 16 MB de JSON. Montei uma extração que roda todo dia e mostra só as linhas que interessam, com o nome do atributo e o órgão que exige: SEU-LINK
+> A Notícia Siscomex avisa. Mas avisa em prosa, por NCM, e o arquivo onde a informação está estruturada tem 16 MB de JSON. Montei uma extração que roda todo dia e mostra só as linhas que interessam, com o nome do atributo e o órgão que exige: https://viniciuscaetanosr.github.io/sentinela-catalogo/
 >
 > É gratuito e o código é aberto. Se você mantém catálogo de importação, vale conferir se alguma dessas NCMs é sua.
 
