@@ -205,11 +205,23 @@ def atributos_destaque(dados, lista_viradas, limite=24, max_ncms=60):
         if v["atributo"] not in das_viradas:
             das_viradas.append(v["atributo"])
 
+    # Obrigatorio: todo atributo citado numa NCM afetada precisa de pagina,
+    # senao a pagina daquela NCM linka para o vazio.
+    alvo = {v["ncm"] for v in lista_viradas}
+    obrigatorios = list(das_viradas)
+    for ncm in dados.get("listaNcm", []):
+        if ncm.get("codigoNcm") not in alvo:
+            continue
+        for vinculo in ncm.get("listaAtributos", []):
+            if vinculo["codigo"] not in obrigatorios:
+                obrigatorios.append(vinculo["codigo"])
+
     mais_vinculados = sorted(por_atributo, key=lambda c: -len(por_atributo[c]))
-    ordem = das_viradas + [c for c in mais_vinculados if c not in das_viradas]
+    ordem = obrigatorios + [c for c in mais_vinculados if c not in obrigatorios]
+    corte = max(limite, len(obrigatorios))
 
     saida = []
-    for codigo in ordem[:limite]:
+    for codigo in ordem[:corte]:
         ncms = sorted(por_atributo.get(codigo, []))
         item = detalhe_publico(dic.get(codigo))
         item.update({
