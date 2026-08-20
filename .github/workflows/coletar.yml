@@ -47,10 +47,18 @@ jobs:
           git add dados site
           if git diff --staged --quiet; then
             echo "Nada mudou hoje."
-          else
-            git commit -m "coleta $(date -u +%Y-%m-%d)"
-            git push
+            exit 0
           fi
+          git commit -m "coleta $(date -u +%Y-%m-%d)"
+          # O checkout pode estar defasado se outra run (ou um push manual)
+          # avancou o main depois que este job comecou. Rebase e tenta de novo.
+          for tentativa in 1 2 3; do
+            if git push; then exit 0; fi
+            echo "push rejeitado; rebase e nova tentativa ($tentativa/3)"
+            git pull --rebase origin main
+          done
+          echo "::error::nao foi possivel empurrar apos 3 tentativas"
+          exit 1
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
