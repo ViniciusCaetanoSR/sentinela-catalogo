@@ -32,9 +32,16 @@ RAIZ = os.path.dirname(os.path.abspath(__file__))
 DIR_DADOS = os.path.join(RAIZ, "dados")
 DIR_HISTORICO = os.path.join(DIR_DADOS, "historico")
 ARQ_ULTIMO = os.path.join(DIR_DADOS, "ultimo.json")
+ARQ_ATRIBUTOS = os.path.join(DIR_DADOS, "atributos.json")
 
 FUSO = ZoneInfo("America/Sao_Paulo")
 RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _sem_data(texto):
+    """Ignora a linha de data ao comparar - so o conteudo importa."""
+    nl = chr(10)
+    return nl.join(l for l in texto.split(nl) if "atualizado_em" not in l)
 
 
 def hoje_br():
@@ -135,11 +142,16 @@ def viradas(dados, referencia=None):
     return achados
 
 
+MAX_DOMINIO = 120
+
+
 def detalhe_publico(detalhe):
     """Os campos do dicionario de atributos que a pagina usa."""
     if not detalhe:
         return {}
+    dominio = detalhe.get("dominio") or []
     return {
+        "dominio_total": len(dominio),
         "codigo": detalhe.get("codigo"),
         "nome": detalhe.get("nomeApresentacao") or detalhe.get("nome"),
         "definicao": detalhe.get("definicao"),
@@ -148,9 +160,11 @@ def detalhe_publico(detalhe):
         "orgaos": detalhe.get("orgaos") or [],
         "multivalorado": detalhe.get("multivalorado"),
         # dominio[].codigo e string e preserva zero a esquerda ("01").
+        # Truncado: ATT_14500 ("Municipio do destino final") tem 5.570 opcoes,
+        # que renderizariam uma pagina de 187 mil caracteres.
         "dominio": [
             {"codigo": d.get("codigo"), "descricao": d.get("descricao")}
-            for d in (detalhe.get("dominio") or [])
+            for d in dominio[:MAX_DOMINIO]
         ],
     }
 
@@ -189,48 +203,93 @@ def ncms_afetadas(dados, lista_viradas):
     return saida
 
 
-def atributos_destaque(dados, lista_viradas, limite=24, max_ncms=60):
-    """Atributos que ganham pagina propria.
+def tem_conteudo(detalhe, total_ncms):
+    """O filtro de qualidade das paginas por atributo.
 
-    Prioridade: os que aparecem nas viradas, depois os mais vinculados.
+    Exige conteudo REAL, nao a mera existencia do registro: sem isso
+    entrariam centenas de paginas do tipo "Detalhamento" com duas linhas e
+    uma NCM - exatamente o padrao de conteudo fino que penaliza o site todo.
     """
-    dic = dicionario_atributos(dados)
+    if not detalhe:
+        return False
+    # Prosa oficial e o sinal forte: 823 atributos tem orientacao ou definicao.
+    # Sem prosa, so entra quem tem lista de opcoes substantiva OU alcance largo -
+    # um atributo em 20+ NCMs e encontrado por muita gente mesmo sem texto.
+    return bool(
+        (detalhe.get("orientacaoPreenchimento") or "").strip()
+        or (detalhe.get("definicao") or "").strip()
+        or len(detalhe.get("dominio") or []) >= 8
+        or total_ncms >= 20
+    )
+
+
+def indice_por_atributo(dados):
+    """codigo do atributo -> lista de NCMs vinculadas."""
     por_atributo = {}
     for ncm in dados.get("listaNcm", []):
         for vinculo in ncm.get("listaAtributos", []):
             por_atributo.setdefault(vinculo["codigo"], []).append(ncm["codigoNcm"])
+    return por_atributo
 
-    das_viradas = []
-    for v in lista_viradas:
-        if v["atributo"] not in das_viradas:
-            das_viradas.append(v["atributo"])
 
-    # Obrigatorio: todo atributo citado numa NCM afetada precisa de pagina,
-    # senao a pagina daquela NCM linka para o vazio.
+def atributos_publicaveis(dados, lista_viradas, max_ncms=60):
+    """Todo atributo que merece pagina propria.
+
+    Entram, sempre: os das viradas e os citados por NCM afetada - senao as
+    paginas daquelas NCMs linkariam para o vazio. Os demais entram pelo
+    filtro de qualidade.
+    """
+    dic = dicionario_atributos(dados)
+    por_atributo = indice_por_atributo(dados)
+
+    obrigatorios = {v["atributo"] for v in lista_viradas}
     alvo = {v["ncm"] for v in lista_viradas}
-    obrigatorios = list(das_viradas)
     for ncm in dados.get("listaNcm", []):
-        if ncm.get("codigoNcm") not in alvo:
-            continue
-        for vinculo in ncm.get("listaAtributos", []):
-            if vinculo["codigo"] not in obrigatorios:
-                obrigatorios.append(vinculo["codigo"])
-
-    mais_vinculados = sorted(por_atributo, key=lambda c: -len(por_atributo[c]))
-    ordem = obrigatorios + [c for c in mais_vinculados if c not in obrigatorios]
-    corte = max(limite, len(obrigatorios))
+        if ncm.get("codigoNcm") in alvo:
+            obrigatorios |= {v["codigo"] for v in ncm.get("listaAtributos", [])}
 
     saida = []
-    for codigo in ordem[:corte]:
-        ncms = sorted(por_atributo.get(codigo, []))
-        item = detalhe_publico(dic.get(codigo))
+    for codigo, ncms in sorted(por_atributo.items()):
+        detalhe = dic.get(codigo)
+        if codigo not in obrigatorios and not tem_conteudo(detalhe, len(ncms)):
+            continue
+        item = detalhe_publico(detalhe)
         item.update({
             "codigo": codigo,
             "total_ncms": len(ncms),
-            "ncms": ncms[:max_ncms],
-            "nas_viradas": codigo in das_viradas,
+            "ncms": sorted(ncms)[:max_ncms],
+            "nas_viradas": codigo in {v["atributo"] for v in lista_viradas},
         })
         saida.append(item)
+    return saida
+
+
+def orgaos(atributos):
+    """Um agrupamento por orgao anuente.
+
+    Cria um eixo de navegacao e de consulta novo ("atributos anvisa duimp") e
+    evita um indice unico com centenas de itens.
+    """
+    por_orgao = {}
+    for a in atributos:
+        for orgao in a.get("orgaos") or ["Sem órgão declarado"]:
+            por_orgao.setdefault(orgao, []).append({
+                "codigo": a["codigo"],
+                "nome": a.get("nome"),
+                "forma_preenchimento": a.get("forma_preenchimento"),
+                "total_ncms": a.get("total_ncms", 0),
+                "nas_viradas": a.get("nas_viradas", False),
+            })
+    saida = []
+    for orgao, lista in sorted(por_orgao.items()):
+        lista.sort(key=lambda x: (-x["total_ncms"], x["codigo"]))
+        saida.append({
+            "orgao": orgao,
+            "slug": re.sub(r"[^a-z0-9]+", "-", orgao.lower()).strip("-"),
+            "total_atributos": len(lista),
+            "atributos": lista,
+        })
+    saida.sort(key=lambda x: -x["total_atributos"])
     return saida
 
 
@@ -269,8 +328,29 @@ def coletar():
         "contagens": contagens(dados),
         "viradas": vs,
         "ncms_afetadas": ncms_afetadas(dados, vs),
-        "atributos_destaque": atributos_destaque(dados, vs),
     }
+
+    # O detalhe dos atributos sai do snapshot diario: sao centenas de itens e
+    # eles quase nunca mudam. Reescrever so quando o conteudo muda mantem o
+    # commit diario pequeno.
+    publicaveis = atributos_publicaveis(dados, vs)
+    catalogo = {
+        "versao": dados.get("versao"),
+        "atualizado_em": ref.isoformat(),
+        "atributos": publicaveis,
+        "orgaos": orgaos(publicaveis),
+    }
+    corpo = json.dumps(catalogo, ensure_ascii=False, indent=1, sort_keys=True)
+    anterior = ""
+    if os.path.exists(ARQ_ATRIBUTOS):
+        with open(ARQ_ATRIBUTOS, encoding="utf-8") as f:
+            anterior = f.read()
+    if _sem_data(corpo) != _sem_data(anterior):
+        with open(ARQ_ATRIBUTOS, "w", encoding="utf-8") as f:
+            f.write(corpo + chr(10))
+        snapshot["catalogo_reescrito"] = True
+    snapshot["atributos_publicaveis"] = len(publicaveis)
+    snapshot["orgaos"] = len(catalogo["orgaos"])
 
     os.makedirs(DIR_HISTORICO, exist_ok=True)
     caminho = os.path.join(DIR_HISTORICO, f"{ref.isoformat()}.json")
@@ -332,6 +412,10 @@ def main():
     print("Contagens de controle:")
     for linha in verificar(snapshot):
         print(linha)
+    print()
+    print(f"{snapshot.get('atributos_publicaveis', 0)} atributos publicaveis em "
+          f"{snapshot.get('orgaos', 0)} orgaos"
+          f"{' (catalogo reescrito)' if snapshot.get('catalogo_reescrito') else ' (catalogo inalterado)'}")
     print()
     print(f"{len(v)} viradas agendadas (obrigatorio=false E dataFimVigencia > hoje):")
     for x in v:

@@ -28,6 +28,7 @@ DIR_SITE = os.path.join(RAIZ, "site")
 DIR_HISTORICO = os.path.join(RAIZ, "dados", "historico")
 ARQ_ULTIMO = os.path.join(RAIZ, "dados", "ultimo.json")
 ARQ_CONFIG = os.path.join(RAIZ, "config.json")
+ARQ_ATRIBUTOS = os.path.join(RAIZ, "dados", "atributos.json")
 
 MESES = ("", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
          "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
@@ -35,7 +36,8 @@ MESES = ("", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
 
 def config():
     padrao = {"base_url": "", "base_path": "", "form_embed_url": "",
-              "contato_email": "", "goatcounter_code": ""}
+              "contato_email": "", "goatcounter_code": "",
+              "dominio": "", "indexnow_key": ""}
     if os.path.exists(ARQ_CONFIG):
         with open(ARQ_CONFIG, encoding="utf-8") as f:
             padrao.update(json.load(f))
@@ -137,7 +139,29 @@ def bloco_analytics(cfg):
             ' async src="//gc.zgo.at/count.js"></script>')
 
 
-def pagina(cfg, snapshot, corpo, titulo, descricao, caminho):
+def bloco_jsonld(dados):
+    if not dados:
+        return ""
+    return ('<script type="application/ld+json">'
+            + json.dumps(dados, ensure_ascii=False) + '</script>')
+
+
+def trilha(cfg, itens):
+    """BreadcrumbList - o dado estruturado com retorno visivel no resultado."""
+    base = (cfg.get("base_url", "").rstrip("/")
+            + cfg.get("base_path", "").rstrip("/"))
+    return {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": i + 1, "name": nome,
+             "item": base + caminho}
+            for i, (nome, caminho) in enumerate(itens)
+        ],
+    }
+
+
+def pagina(cfg, snapshot, corpo, titulo, descricao, caminho, jsonld=None):
     base = template("base.html")
     canonical = (cfg.get("base_url", "").rstrip("/")
                  + cfg.get("base_path", "").rstrip("/") + caminho) or caminho
@@ -149,7 +173,7 @@ def pagina(cfg, snapshot, corpo, titulo, descricao, caminho):
         "coletado_em": br(snapshot["data_referencia"]),
         "versao": esc(snapshot["contagens"]["versao"]),
         "formulario": bloco_formulario(cfg),
-        "analytics": bloco_analytics(cfg),
+        "analytics": bloco_analytics(cfg) + bloco_jsonld(jsonld),
         "feed": "/feed.xml",  # o prefixo de base_path e aplicado depois
     })
     # Em repositorio de projeto o Pages serve sob /<repo>/, entao todo link
@@ -284,9 +308,10 @@ def gerar_index(cfg, s):
                  f'{" — é hoje." if dias == 0 else (" — falta 1 dia." if dias == 1 else f" — faltam {dias} dias.")} '
                  f'Exigência {"do " + orgaos[0] if len(orgaos) == 1 else "dos órgãos anuentes"}.'
                  f'</div>')
-        descricao = (f"Lista atualizada das {len(vs)} NCMs com atributos que viram "
-                     f"obrigatórios no Catálogo de Produtos do Portal Único. "
-                     f"Próximo corte em {br(proxima)}.")
+        descricao = (f"{len(vs)} {plural(len(vs), 'atributo', 'atributos')} em "
+                     f"{ncms} {plural(ncms, 'NCM', 'NCMs')} {plural(len(vs), 'vira', 'viram')} "
+                     f"{plural(len(vs), 'obrigatório', 'obrigatórios')} no Catálogo de "
+                     f"Produtos do Portal Único. Próximo corte em {br(proxima)}.")
     else:
         h1 = "Nenhum atributo de NCM tem virada agendada hoje"
         lede = ("O arquivo oficial de hoje não traz nenhum vínculo com data para virar "
@@ -306,7 +331,24 @@ def gerar_index(cfg, s):
     })
     titulo = ("Atributos de NCM que viram obrigatórios — Catálogo do Portal Único"
               if vs else "Atributos de NCM com virada agendada — Portal Único")
-    caminhos.append(escrever("index.html", pagina(cfg, s, corpo, titulo, descricao, "/")))
+    dataset = {
+        "@context": "https://schema.org",
+        "@type": "Dataset",
+        "name": "Atributos por NCM com virada agendada — Catálogo de Produtos",
+        "description": ("Extração diária da relação oficial de atributos por NCM do "
+                        "Portal Único, isolando os que têm data marcada para virar "
+                        "obrigatórios."),
+        "inLanguage": "pt-BR",
+        "isAccessibleForFree": True,
+        "creativeWorkStatus": "Published",
+        "dateModified": s["data_referencia"],
+        "isBasedOn": s.get("fonte"),
+        "creator": {"@type": "GovernmentOrganization",
+                    "name": "Portal Único de Comércio Exterior — Receita Federal"},
+        "temporalCoverage": s["data_referencia"],
+    }
+    caminhos.append(escrever("index.html",
+                             pagina(cfg, s, corpo, titulo, descricao, "/", dataset)))
     return caminhos
 
 
@@ -351,8 +393,10 @@ def gerar_ncms(cfg, s):
             "tabela": tabela_atributos_ncm(ficha["atributos"]),
         })
         titulo = f"NCM {ncm} — atributos que viram obrigatórios em {br(proxima)}"
-        caminhos.append(escrever(f"ncm/{ncm}/index.html",
-                                 pagina(cfg, s, corpo, titulo, descricao, f"/ncm/{ncm}/")))
+        caminhos.append(escrever(f"ncm/{ncm}/index.html", pagina(
+            cfg, s, corpo, titulo, descricao, f"/ncm/{ncm}/",
+            trilha(cfg, [("Início", "/"), ("NCMs", "/ncm/"),
+                         (f"NCM {ncm}", f"/ncm/{ncm}/")]))))
 
     # indice
     itens = "".join(
@@ -370,13 +414,13 @@ def gerar_ncms(cfg, s):
     return caminhos
 
 
-def gerar_atributos(cfg, s):
+def gerar_atributos(cfg, s, catalogo):
     caminhos = []
     virando = {}
     for v in s["viradas"]:
         virando.setdefault(v["atributo"], []).append(v)
 
-    for a in s["atributos_destaque"]:
+    for a in catalogo["atributos"]:
         cod = a["codigo"]
         nome = a.get("nome") or cod
         vs = virando.get(cod, [])
@@ -399,14 +443,15 @@ def gerar_atributos(cfg, s):
             descricao = (f"{nome} ({cod}) no Catálogo de Produtos do Portal Único: "
                          f"o que preencher, opções válidas e em quais NCMs se aplica.")
 
-        orgaos = "/".join(a.get("orgaos") or []) or "—"
+        lista_orgaos = a.get("orgaos") or []
+        orgaos = "/".join(lista_orgaos) or "—"
         forma = {"LISTA_ESTATICA": "lista de opções", "BOOLEANO": "sim ou não",
                  "TEXTO": "texto livre", "NUMERO_REAL": "número decimal",
                  "NUMERO_INTEIRO": "número inteiro", "DATA": "data"
                  }.get(a.get("forma_preenchimento"), a.get("forma_preenchimento") or "—")
-        lede = (f"Atributo exigido por {orgaos}, preenchido como {forma}. "
-                f"Aplica-se a {milhar(a['total_ncms'])} NCM"
-                f"{'s' if a['total_ncms'] != 1 else ''}.")
+        lede = esc(f"Atributo exigido por {orgaos}, preenchido como {forma}. "
+                   f"Aplica-se a {milhar(a['total_ncms'])} NCM"
+                   f"{'s' if a['total_ncms'] != 1 else ''}.")
 
         definicao = (f"<h2>O que é</h2><p>{esc(a['definicao'])}</p>"
                      if a.get("definicao") else "")
@@ -416,8 +461,15 @@ def gerar_atributos(cfg, s):
         if a.get("dominio"):
             opcoes = "".join(f"<dt>{esc(d['codigo'])}</dt><dd>{esc(d['descricao'])}</dd>"
                              for d in a["dominio"])
-            dominio = (f"<h2>Opções válidas ({len(a['dominio'])})</h2>"
-                       f'<dl class="dominio">{opcoes}</dl>')
+            total_dom = a.get("dominio_total", len(a["dominio"]))
+            corte = ""
+            if total_dom > len(a["dominio"]):
+                corte = (f'<p style="font-size:.9rem;color:var(--faint)">Mostrando as '
+                         f'{milhar(len(a["dominio"]))} primeiras de '
+                         f'{milhar(total_dom)} opções. A lista completa está no '
+                         f'arquivo oficial.</p>')
+            dominio = (f"<h2>Opções válidas ({milhar(total_dom)})</h2>"
+                       f'<dl class="dominio">{opcoes}</dl>{corte}')
         else:
             dominio = ""
 
@@ -433,29 +485,133 @@ def gerar_atributos(cfg, s):
                         if any(f["ncm"] == n for f in s["ncms_afetadas"])
                         else f"<li>{esc(n)}</li>" for n in mostradas)
 
+        if lista_orgaos:
+            links = " · ".join(
+                f'<a href="/orgaos/{re.sub(chr(91) + "^a-z0-9" + chr(93) + "+", "-", o.lower()).strip("-")}/">'
+                f'{esc(o)}</a>' for o in lista_orgaos)
+            lede = lede + f' <span style="font-size:.92rem">Ver todos os atributos de {links}.</span>'
+
         corpo = preencher(template("atributo.html"), {
-            "codigo": esc(cod), "h1": esc(h1), "lede": esc(lede), "aviso": aviso,
+            "codigo": esc(cod), "h1": esc(h1), "lede": lede, "aviso": aviso,
             "definicao": definicao, "orientacao": orientacao, "dominio": dominio,
             "aplicacao": esc(aplicacao),
             "ncms": f'<ul class="limpa">{chips}</ul>' if chips else "",
         })
         titulo = f"{nome} ({cod}) — Catálogo de Produtos do Portal Único"
-        caminhos.append(escrever(f"atributos/{cod}/index.html",
-                                 pagina(cfg, s, corpo, titulo, descricao,
-                                        f"/atributos/{cod}/")))
+        caminhos.append(escrever(f"atributos/{cod}/index.html", pagina(
+            cfg, s, corpo, titulo, descricao, f"/atributos/{cod}/",
+            trilha(cfg, [("Início", "/"), ("Atributos", "/atributos/"),
+                         (nome, f"/atributos/{cod}/")]))))
 
+    orgs = "".join(
+        f'<li><a href="/orgaos/{o["slug"]}/">{esc(o["orgao"])} · '
+        f'{o["total_atributos"]}</a></li>' for o in catalogo["orgaos"])
+    destaque = [a for a in catalogo["atributos"] if a.get("nas_viradas")]
     itens = "".join(
         f'<li><a href="/atributos/{a["codigo"]}/">{esc(a["codigo"])} · '
-        f'{esc(a.get("nome") or "")}</a></li>' for a in s["atributos_destaque"])
+        f'{esc(a.get("nome") or "")}</a></li>' for a in destaque)
     corpo = (f'<span class="chapeu">Índice</span><h1>Atributos do Catálogo de Produtos</h1>'
-             f'<p class="lede">O que cada atributo exige, as opções válidas e em quais '
-             f'NCMs se aplica. Começando pelos que têm virada agendada e pelos mais '
-             f'usados.</p><ul class="limpa" style="flex-direction:column">{itens}</ul>')
+             f'<p class="lede">São {milhar(len(catalogo["atributos"]))} atributos com '
+             f'orientação oficial de preenchimento, opções válidas e a lista de NCMs onde '
+             f'se aplicam. Navegue pelo órgão que exige cada um.</p>'
+             f'<h2>Por órgão anuente</h2>'
+             f'<ul class="limpa">{orgs}</ul>'
+             + (f'<h2>Com virada agendada</h2><ul class="limpa">{itens}</ul>'
+                if itens else ""))
     caminhos.append(escrever("atributos/index.html", pagina(
         cfg, s, corpo, "Atributos do Catálogo de Produtos — Portal Único",
         "Índice dos atributos do Catálogo de Produtos do Portal Único, com opções "
         "válidas e NCMs onde se aplicam.", "/atributos/")))
     return caminhos
+
+
+def gerar_orgaos(cfg, s, catalogo):
+    """Uma pagina por orgao anuente.
+
+    Cria um eixo de consulta novo ("atributos anvisa duimp") e resolve o
+    problema de um indice unico com mais de mil itens.
+    """
+    caminhos = []
+    virando = {a["codigo"] for a in catalogo["atributos"] if a.get("nas_viradas")}
+
+    for o in catalogo["orgaos"]:
+        linhas = []
+        for a in o["atributos"]:
+            marca = ('<span class="tag muda">virada agendada</span>'
+                     if a["codigo"] in virando else "")
+            forma = {"LISTA_ESTATICA": "lista de opções", "BOOLEANO": "sim ou não",
+                     "TEXTO": "texto livre", "NUMERO_REAL": "número decimal",
+                     "NUMERO_INTEIRO": "número inteiro", "DATA": "data"
+                     }.get(a.get("forma_preenchimento"), a.get("forma_preenchimento") or "—")
+            linhas.append(
+                f'<tr><td class="cod"><a href="/atributos/{a["codigo"]}/">'
+                f'{esc(a["codigo"])}</a></td>'
+                f'<td>{esc(a.get("nome") or "—")}</td>'
+                f'<td>{esc(forma)}</td>'
+                f'<td class="num">{milhar(a.get("total_ncms", 0))}</td>'
+                f'<td>{marca}</td></tr>')
+        tabela = ('<div class="rolagem"><table><thead><tr><th>Código</th>'
+                  '<th>Atributo</th><th>Preenchimento</th><th>NCMs</th>'
+                  '<th></th></tr></thead>'
+                  f'<tbody>{"".join(linhas)}</tbody></table></div>')
+
+        n = o["total_atributos"]
+        com_virada = [a for a in o["atributos"] if a["codigo"] in virando]
+        h1 = f'Atributos exigidos pelo {o["orgao"]} no Catálogo de Produtos'
+        lede = (f'O {o["orgao"]} exige {milhar(n)} '
+                f'{plural(n, "atributo", "atributos")} no Catálogo de Produtos do '
+                f'Portal Único. Cada um com orientação oficial de preenchimento e '
+                f'as NCMs em que se aplica.')
+        aviso = ""
+        if com_virada:
+            itens = "".join(f'<li><a href="/atributos/{a["codigo"]}/">'
+                            f'{esc(a.get("nome") or a["codigo"])}</a></li>'
+                            for a in com_virada)
+            aviso = (f'<div class="aviso"><strong>{len(com_virada)} '
+                     f'{plural(len(com_virada), "atributo deste órgão tem", "atributos deste órgão têm")} '
+                     f'virada agendada:</strong>'
+                     f'<ul class="limpa" style="margin-top:10px">{itens}</ul></div>')
+
+        corpo = preencher(template("orgao.html"), {
+            "h1": esc(h1), "lede": esc(lede), "aviso": aviso, "tabela": tabela,
+        })
+        caminhos.append(escrever(f'orgaos/{o["slug"]}/index.html', pagina(
+            cfg, s, corpo,
+            f'Atributos do {o["orgao"]} — Catálogo de Produtos do Portal Único',
+            f'Os {milhar(n)} atributos exigidos pelo {o["orgao"]} no Catálogo de '
+            f'Produtos do Portal Único, com orientação de preenchimento e NCMs.',
+            f'/orgaos/{o["slug"]}/',
+            trilha(cfg, [("Início", "/"), ("Órgãos", "/orgaos/"),
+                         (o["orgao"], f'/orgaos/{o["slug"]}/')]))))
+
+    itens = "".join(
+        f'<li><a href="/orgaos/{o["slug"]}/">{esc(o["orgao"])} · '
+        f'{o["total_atributos"]}</a></li>' for o in catalogo["orgaos"])
+    corpo = (f'<span class="chapeu">Índice</span>'
+             f'<h1>Órgãos anuentes do Catálogo de Produtos</h1>'
+             f'<p class="lede">Quais órgãos exigem atributos no Catálogo de Produtos '
+             f'do Portal Único, e quantos cada um exige.</p>'
+             f'<ul class="limpa">{itens}</ul>')
+    caminhos.append(escrever("orgaos/index.html", pagina(
+        cfg, s, corpo, "Órgãos anuentes — Catálogo de Produtos do Portal Único",
+        "Índice dos órgãos que exigem atributos no Catálogo de Produtos, "
+        "com o número de atributos de cada um.", "/orgaos/",
+        trilha(cfg, [("Início", "/"), ("Órgãos", "/orgaos/")]))))
+    return caminhos
+
+
+def gerar_cname(cfg):
+    """O Pages exige CNAME na raiz publicada, e o site/ e apagado a cada build."""
+    dominio = cfg.get("dominio")
+    if dominio:
+        escrever("CNAME", dominio + chr(10))
+
+
+def gerar_indexnow(cfg):
+    """Chave do IndexNow: o Bing aceita ping instantaneo de URL alterada."""
+    chave = cfg.get("indexnow_key")
+    if chave:
+        escrever(chave + ".txt", chave)
 
 
 def gerar_privacidade(cfg, s):
@@ -537,6 +693,12 @@ def main():
         return 1
     with open(ARQ_ULTIMO, encoding="utf-8") as f:
         s = json.load(f)
+    if not os.path.exists(ARQ_ATRIBUTOS):
+        print(f"ERRO: {ARQ_ATRIBUTOS} nao existe. Rode coletor.py antes.",
+              file=sys.stderr)
+        return 1
+    with open(ARQ_ATRIBUTOS, encoding="utf-8") as f:
+        catalogo = json.load(f)
 
     cfg = config()
     if os.path.isdir(DIR_SITE):
@@ -545,9 +707,12 @@ def main():
     caminhos = []
     caminhos += gerar_index(cfg, s)
     caminhos += gerar_ncms(cfg, s)
-    caminhos += gerar_atributos(cfg, s)
+    caminhos += gerar_atributos(cfg, s, catalogo)
+    caminhos += gerar_orgaos(cfg, s, catalogo)
     caminhos += gerar_privacidade(cfg, s)
     gerar_feed(cfg, s)
+    gerar_cname(cfg)
+    gerar_indexnow(cfg)
     gerar_sitemap(cfg, caminhos, s)
 
     print(f"{len(caminhos)} paginas geradas em site/ "
