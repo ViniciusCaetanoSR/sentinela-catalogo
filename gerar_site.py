@@ -68,6 +68,11 @@ def br(iso):
     return f"{d}/{m}/{a}"
 
 
+def plural(n, singular, plural_form):
+    """1 -> 'vinculo', 2 -> 'vinculos'. Evita 'Sao 1 vinculos em 1 NCMs'."""
+    return singular if abs(n) == 1 else plural_form
+
+
 def milhar(n):
     """1234567 -> 1.234.567"""
     return f"{n:,}".replace(",", ".")
@@ -205,7 +210,7 @@ def tabela_atributos_ncm(atributos):
             f'<tbody>{"".join(linhas)}</tbody></table></div>')
 
 
-def bloco_historico():
+def bloco_historico(ncms_com_pagina=frozenset()):
     """O que mudou nos ultimos 30 dias, montado do arquivo diario.
 
     O endpoint oficial ignora ?data= e nao serve versoes passadas: sem este
@@ -235,13 +240,16 @@ def bloco_historico():
     partes = ["<h2>O que mudou nos últimos 30 dias</h2>"]
     if novas:
         itens = "".join(
-            f'<li><a href="/ncm/{v["ncm"]}/">{esc(v["ncm"])}</a> — '
-            f'{esc(v["nome"] or v["atributo"])}, a partir de {br(v["vira_obrigatorio_em"])}</li>'
+            (f'<li><a href="/ncm/{v["ncm"]}/">{esc(v["ncm"])}</a> — '
+             if v["ncm"] in ncms_com_pagina else f'<li>{esc(v["ncm"])} — ')
+            + f'{esc(v["nome"] or v["atributo"])}, a partir de {br(v["vira_obrigatorio_em"])}</li>'
             for v in sorted(novas, key=lambda x: x["vira_obrigatorio_em"]))
         partes.append(f"<h3>Viradas novas</h3><ul>{itens}</ul>")
     if sumiram:
+        # NCM que saiu da lista nao tem mais pagina gerada - nao linkar.
         itens = "".join(
-            f'<li><a href="/ncm/{n}/">{esc(n)}</a> — {esc(c)}</li>'
+            (f'<li><a href="/ncm/{n}/">{esc(n)}</a> — {esc(c)}</li>'
+             if n in ncms_com_pagina else f'<li>{esc(n)} — {esc(c)}</li>')
             for n, c in sumiram)
         partes.append(
             "<h3>Saíram da lista</h3><p style='font-size:.92rem;color:var(--muted)'>"
@@ -262,13 +270,18 @@ def gerar_index(cfg, s):
         dias = dias_ate(proxima, ref)
         ncms = len({v["ncm"] for v in vs})
         orgaos = sorted({o for v in vs for o in v["orgaos"]})
-        h1 = (f"{len(vs)} atributos de NCM viram obrigatórios "
-              f"nos próximos {max(dias, 1)} dias")
-        lede = (f"São {len(vs)} vínculos em {ncms} NCMs. "
-                f"Os produtos dessas NCMs que estiverem sem o atributo preenchido "
+        h1 = (f"{len(vs)} {plural(len(vs), 'atributo', 'atributos')} de NCM "
+              f"{plural(len(vs), 'vira', 'viram')} "
+              f"{plural(len(vs), 'obrigatório', 'obrigatórios')} "
+              f"{plural(max(dias, 1), 'amanhã', f'nos próximos {max(dias, 1)} dias')}")
+        lede = (f"{plural(len(vs), 'É', 'São')} {len(vs)} "
+                f"{plural(len(vs), 'vínculo', 'vínculos')} em {ncms} "
+                f"{plural(ncms, 'NCM', 'NCMs')}. "
+                f"Os produtos {plural(ncms, 'dessa NCM', 'dessas NCMs')} que estiverem "
+                f"sem {plural(len(vs), 'o atributo preenchido', 'os atributos preenchidos')} "
                 f"na data são desativados no Catálogo de Produtos do Portal Único.")
         aviso = (f'<div class="aviso"><strong>Próximo corte: {por_extenso(proxima)}</strong>'
-                 f'{" — é hoje." if dias == 0 else f" — faltam {dias} dias."} '
+                 f'{" — é hoje." if dias == 0 else (" — falta 1 dia." if dias == 1 else f" — faltam {dias} dias.")} '
                  f'Exigência {"do " + orgaos[0] if len(orgaos) == 1 else "dos órgãos anuentes"}.'
                  f'</div>')
         descricao = (f"Lista atualizada das {len(vs)} NCMs com atributos que viram "
@@ -289,7 +302,7 @@ def gerar_index(cfg, s):
         "lede": esc(lede),
         "aviso": aviso,
         "tabela": tabela_viradas(vs, ref),
-        "historico": bloco_historico(),
+        "historico": bloco_historico({f["ncm"] for f in s.get("ncms_afetadas", [])}),
     })
     titulo = ("Atributos de NCM que viram obrigatórios — Catálogo do Portal Único"
               if vs else "Atributos de NCM com virada agendada — Portal Único")
@@ -321,7 +334,9 @@ def gerar_ncms(cfg, s):
                 f"{'s' if len(vs) > 1 else ''} serão desativados no Catálogo de Produtos "
                 f"a partir de {por_extenso(proxima)}.")
         itens = "".join(f"<li><strong>{esc(n)}</strong></li>" for n in nomes)
-        aviso = (f'<div class="aviso"><strong>Faltam {dias} dias.</strong> '
+        aviso = (f'<div class="aviso"><strong>'
+                 f'{"É hoje." if dias == 0 else ("Falta 1 dia." if dias == 1 else f"Faltam {dias} dias.")}'
+                 f'</strong> '
                  f'Exigência {"do " + orgaos[0] if len(orgaos) == 1 else "dos órgãos anuentes"}. '
                  f'Atributos afetados:<ul style="margin:8px 0 0">{itens}</ul></div>')
         descricao = (f"NCM {ncm}: {len(vs)} atributo(s) do Catálogo de Produtos do Portal "
