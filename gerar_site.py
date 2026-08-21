@@ -458,6 +458,22 @@ def gerar_atributos(cfg, s):
     return caminhos
 
 
+def gerar_privacidade(cfg, s):
+    """Pagina de privacidade.
+
+    O site nao coleta nada no servidor (o mailto abre o cliente do visitante),
+    mas roda analitica - e para um publico de compliance a ausencia da pagina
+    custa mais credibilidade do que o esforco de escreve-la.
+    """
+    corpo = template("privacidade.html")
+    return [escrever("privacidade/index.html", pagina(
+        cfg, s, corpo,
+        "Privacidade — Sentinela do Catálogo",
+        "O que este site coleta: nada no servidor, analítica sem cookie, e o "
+        "que é feito com o e-mail de quem escreve.",
+        "/privacidade/"))]
+
+
 def gerar_feed(cfg, s):
     """RSS das viradas agendadas.
 
@@ -530,6 +546,7 @@ def main():
     caminhos += gerar_index(cfg, s)
     caminhos += gerar_ncms(cfg, s)
     caminhos += gerar_atributos(cfg, s)
+    caminhos += gerar_privacidade(cfg, s)
     gerar_feed(cfg, s)
     gerar_sitemap(cfg, caminhos, s)
 
