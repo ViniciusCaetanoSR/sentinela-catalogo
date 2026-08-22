@@ -1,0 +1,26 @@
+# Metadados do projeto e configuração das ferramentas de desenvolvimento.
+# Nada aqui é lido em runtime: os três scripts continuam só com a
+# biblioteca padrão, e pip só entra no job de lint do CI.
+
+[project]
+name = "sentinela-catalogo"
+version = "0.1.0"
+description = "Monitora a relação pública de atributos por NCM do Portal Único e publica quais vão virar obrigatórios"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff", "coverage"]
+
+[tool.ruff]
+line-length = 92
+target-version = "py39"
+# site/ é gerado; dados/ é JSON. Nenhum dos dois tem Python para olhar.
+extend-exclude = ["site", "dados"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]
+
+[tool.ruff.format]
+quote-style = "double"

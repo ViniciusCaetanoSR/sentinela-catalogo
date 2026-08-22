@@ -1,11 +1,14 @@
 version: 2
 updates:
-  # As actions estao presas por SHA - o Dependabot e quem mantem os SHAs
+  # As actions estão presas por SHA - o Dependabot é quem mantém os SHAs
   # atualizados. Sem ele, pinar vira congelar, e congelar num commit com
-  # falha de seguranca e pior do que seguir a tag.
+  # falha de segurança é pior do que seguir a tag.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    commit-message:
-      prefix: "ci"
+    # Um PR por semana com todas as actions, não um por action. Os commits
+    # do projeto não usam prefixo, então o Dependabot também não.
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,68 @@
+name: CI
+
+# Roda em todo push e em todo pull request, sem filtro de caminho. Antes, o
+# CI só disparava quando coletor.py ou config.json mudavam - um template
+# quebrado ou um gerador com SyntaxError passava em silêncio até a coleta
+# das seis da manhã. Aqui nada toca a Receita e nada publica: é só prova.
+
+on:
+  push:
+    # Os commits do bot ("coleta", "lastmod") só tocam dados/: rodar a
+    # suíte neles é gastar dois minutos de runner para provar nada.
+    paths-ignore:
+      - "dados/**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 é o piso declarado (zoneinfo); 3.12 é o que o CI de coleta usa.
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Sem pip: o runtime é só a biblioteca padrão, e o teste tem de provar
+      # isso. compileall pega o SyntaxError que a suíte não importaria.
+      - name: Compilar os scripts
+        run: python -m compileall -q coletor.py gerar_site.py indexnow.py servir.py
+      - name: Rodar a suíte (sem rede)
+        run: python -m unittest discover -s tests -v
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      # Único lugar do projeto onde pip entra. ruff e coverage são
+      # ferramentas de quem desenvolve, nunca do que roda em produção.
+      - name: Instalar ruff e coverage
+        run: python -m pip install --quiet ruff coverage
+      - name: ruff check
+        run: python -m ruff check .
+      # `ruff format --check .` fica de fora por enquanto: o código atual
+      # ainda não foi formatado pelo ruff e o passo ficaria vermelho em
+      # todos os arquivos. Entra quando houver um commit só de formatação.
+      # Sem --fail-under de propósito: cobertura é informação, não portão.
+      # Um portão aqui travaria justamente a correção que sobe a cobertura.
+      - name: Cobertura
+        run: |
+          python -m coverage run --branch --include=coletor.py,gerar_site.py,indexnow.py \
+            -m unittest discover -s tests
+          {
+            echo "## Cobertura"
+            echo '```'
+            python -m coverage report -m
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

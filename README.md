@@ -1,8 +1,13 @@
 # Sentinela do Catálogo
 
+[![CI](https://github.com/ViniciusCaetanoSR/sentinela-catalogo/actions/workflows/ci.yml/badge.svg)](https://github.com/ViniciusCaetanoSR/sentinela-catalogo/actions/workflows/ci.yml)
+[![Coletar e publicar](https://github.com/ViniciusCaetanoSR/sentinela-catalogo/actions/workflows/coletar.yml/badge.svg)](https://github.com/ViniciusCaetanoSR/sentinela-catalogo/actions/workflows/coletar.yml)
+
 Monitora a relação pública de **atributos por NCM** do Catálogo de Produtos do Portal Único (Siscomex) e publica, todo dia, quais atributos hoje opcionais têm data marcada para virar obrigatórios — e portanto quais produtos serão desativados se não forem preenchidos até lá.
 
-**Isto não é um produto. É um teste de demanda de 60 dias**, com critério de morte escrito antes de começar. Ver o hub no Notion.
+**Isto não é um produto. É um teste de demanda de 60 dias**, com critério de morte escrito antes de começar. Primeira coleta publicada em 2026-08-20; decisão por volta de 2026-10-19. O critério em si (o que conta como sinal de demanda e o que acontece se ele não aparecer) está no hub do projeto — a ser transcrito aqui quando o teste fechar.
+
+Enquanto o teste corre, o código é mantido como se fosse durar anos — porque, se der certo, vai.
 
 ## A regra
 
@@ -15,23 +20,68 @@ O corte é `>=`, não `>`: no dia exato da virada o vínculo tem de continuar ap
 ## Como roda
 
 ```
-coletor.py     baixa o ZIP oficial e apura
-               -> dados/ultimo.json          snapshot do dia
-               -> dados/historico/AAAA-MM-DD.json
-               -> dados/atributos.json       os atributos que ganham página
-               -> dados/completo.json        mapa NCM->atributos (NÃO versionado)
-gerar_site.py  lê os três -> site/ (HTML estático, sem rede)
+coletor.py      baixa o ZIP oficial e apura
+                lê     dados/ultimo.json              (base rolante do portão)
+                grava  dados/bruto.zip                o ZIP como veio (NÃO versionado)
+                       dados/ultimo.json              snapshot do dia
+                       dados/historico/AAAA-MM-DD.json
+                       dados/atributos.json           os atributos que ganham página
+                       dados/completo.json            mapa NCM->atributos (NÃO versionado)
+
+gerar_site.py   sem rede
+                lê     dados/ultimo.json, atributos.json, completo.json,
+                       dados/historico/*.json         ("o que mudou em 30 dias")
+                       dados/lastmod.json             (hash por página do último build)
+                       config.json, templates/, fontes/
+                grava  site/                          HTML estático, sitemaps, feed
+                       site/mudancas.txt              URLs que mudaram neste build
+                       dados/lastmod.json             (versionado: é o que faz o
+                                                       sitemap não mentir)
+
+indexnow.py     lê     site/mudancas.txt + config.json -> POST no IndexNow
+servir.py       serve  site/ em localhost como o Pages serviria
 ```
 
-GitHub Actions roda os dois todo dia às 09:00 UTC, commita `dados/` e publica `site/` em Pages. Sem servidor, sem banco, sem dependências: **só a biblioteca padrão do Python**.
+Quatro workflows no GitHub Actions:
+
+| workflow | quando | o que faz |
+|---|---|---|
+| **CI** (`ci.yml`) | todo push e pull request | `compileall` + suíte em Python 3.9 e 3.12; job de lint com `ruff` e cobertura (o único lugar com `pip`) |
+| **Coletar e publicar** (`coletar.yml`) | 06:00 BRT, resgate às 10:00 BRT, manual | testes → coleta → commit de `dados/` → release do bruto → render → commit do `lastmod` → Pages → IndexNow; abre/fecha issue `coleta-falhou` |
+| **Renderizar** (`render.yml`) | push em `main` que toca `templates/`, `fontes/`, `gerar_site.py`, `config.json`; manual | render e deploy **sem coleta**, a partir do `completo.json` guardado em cache |
+| **Vigia** (`vigia.yml`) | 12:00 BRT | homem morto: se o snapshot tem mais de dois dias, abre issue `vigia` |
+
+Sem servidor, sem banco, sem dependências: **só a biblioteca padrão do Python**, 3.9+ (o piso é o `zoneinfo`).
+
+## Rodar localmente
 
 ```bash
-python coletor.py                      # baixa e apura
-python gerar_site.py                   # gera site/
-python -m unittest discover -s tests   # testes, sem rede
+python coletor.py                         # baixa o ZIP oficial e apura (bate na Receita)
+python gerar_site.py                      # gera site/ a partir de dados/ — sem rede
+python servir.py                          # http://localhost:8000/sentinela-catalogo/
+python -m unittest discover -s tests -v   # ~200 testes em cerca de 1 s, sem rede
 ```
 
-Roda em **Python 3.9+** (o piso é o `zoneinfo`). O CI fixa 3.12. O gerador tinha duas f-strings com aspas aninhadas que exigiam 3.12 sem que nada dissesse isso — em 3.11 o script morria com um `SyntaxError` seco; foram reescritas.
+`servir.py` existe porque o site é gerado para viver sob o `base_path` (`/sentinela-catalogo/`): abrir `site/index.html` direto no navegador quebra todo link interno. O script tira o prefixo do caminho e serve `404.html` para o que não existe — o mesmo que o Pages faz.
+
+No **Windows**, `pip install tzdata` para o fuso oficial: sem o pacote, o `zoneinfo` não encontra `America/Sao_Paulo` e o coletor cai num UTC-3 fixo com aviso (correto desde que o Brasil aboliu o horário de verão, em 2019, mas é bom saber que é um fallback).
+
+Lint, só para quem desenvolve (o runtime nunca precisa disso):
+
+```bash
+python -m pip install ruff coverage
+python -m ruff check .
+python -m ruff format --check .
+```
+
+## Arquitetura
+
+Dois scripts de verdade e dois auxiliares, nenhuma abstração entre eles além de arquivos JSON:
+
+- **`coletor.py`** é o único que toca a rede. Baixa, descompacta, valida a forma, passa pelo portão de sanidade e só então grava — de forma atômica (`.tmp` + `os.replace`), para nunca deixar um JSON pela metade em `dados/`.
+- **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato.
+- **`indexnow.py`** e **`servir.py`** são invólucros finos. O primeiro avisa os buscadores das URLs em `mudancas.txt`; o segundo é preview.
+- **`dados/`** é o estado. Versionado em `main` por enquanto, escrito só pelo bot (ver [CONTRIBUTING.md](CONTRIBUTING.md) sobre por que nunca entra em branch de feature). `completo.json` e `bruto.zip` ficam de fora por tamanho e churn.
 
 ## O que o site publica
 
@@ -50,21 +100,45 @@ Um atributo só ganha página própria se tiver algo próprio a dizer. Os que va
 
 Isso não é paranoia. Sem o portão, um ZIP válido com `listaNcm` vazia derrubava `dados/atributos.json` de 1 MB para 85 bytes, o site de 918 páginas para 5, o sitemap avisava o Google disso, e o workflow commitava e publicava tudo **com exit 0**. O endpoint ignora `?data=`: o dia não volta.
 
-As invariantes de *forma* (`versao` é string, `detalhes == distintos`, nenhum registro descartado) são impressas a cada execução e testadas em `tests/`. As de *magnitude* ficam no portão, com base rolante — uma tabela de números congelados vira ruído em dois dias.
+As invariantes de *forma* (`versao` é string, `detalhes == distintos`, nenhum registro descartado, `obrigatorio` é booleano) são conferidas a cada execução e testadas em `tests/`. As de *magnitude* ficam no portão, com base rolante — uma tabela de números congelados vira ruído em dois dias.
+
+### Válvula do portão
+
+Um dia a Receita vai encolher a relação de verdade — uma reforma tira um órgão anuente, uma NCM inteira sai da nomenclatura — e a queda de 10% vai ser legítima. Para esse dia existe a válvula:
+
+- localmente: `SENTINELA_ACEITAR_QUEDA=1 python coletor.py`;
+- no GitHub: rodar **Coletar e publicar** à mão com o input `aceitar_queda` marcado.
+
+Com a válvula aberta, a queda rolante vira aviso e o snapshot sai marcado com `portao_ignorado: true`. Os **pisos absolutos e a `versao` continuam fatais**: a válvula aceita um catálogo menor, não um catálogo vazio.
+
+## Recuperar um dia perdido
+
+O endpoint não serve versões passadas, então cada dia que a coleta perde é um buraco definitivo em `dados/historico/` — a não ser que alguém tenha guardado o arquivo. O workflow guarda em dois lugares:
+
+1. **Artifact `snapshot-<data>`** da run, por 14 dias: `dados/historico/*.json` e `dados/bruto.zip` como estavam no disco do runner, mesmo quando o job caiu no meio. Baixe pela aba *Actions* da run (ou `gh run download <id> -n snapshot-<data>`).
+2. **Release `bruto-<versao>`**: o ZIP oficial, guardado toda vez que o `sha256` do JSON descompactado muda. A tag é a `versao` que a Receita declara; as notas trazem o sha256 e a data da coleta. É a única cópia de longo prazo do arquivo bruto.
+
+Se a coleta das 06:00 falhou e a de resgate das 10:00 passou, a issue `coleta-falhou` é fechada sozinha com o comentário "coleta de `<data>` publicada". Se as duas falharam, a issue fica aberta e o dia precisa ser recuperado à mão a partir do artifact — ou aceito como perdido, que é o que acontece com a maioria dos feriados do servidor.
+
+## Render sem coleta
+
+Trocar um CSS, um template ou o `config.json` não pede dado novo — pede um site novo. O workflow **Renderizar** dispara sozinho em push em `main` que toque `templates/`, `fontes/`, `gerar_site.py` ou `config.json` (e manualmente, pelo *Run workflow*), restaura o `completo.json` da última coleta do cache do Actions, roda o gerador e publica. A Receita não é consultada.
+
+Se o cache não existir (repositório novo, ou cache expirado por inatividade de uma semana), o job falha com a mensagem "sem `completo.json` em cache; rode o workflow Coletar". Uma coleta regrava o cache.
 
 ## Armadilhas do endpoint
 
 Todas confirmadas contra o servidor real. Estão tratadas no código; não as remova achando que são paranoia.
 
 1. **`?perfil=PUBLICO` é obrigatório.** Sem ele vem `307` e, se o redirect não for seguido, 304 bytes de HTML no lugar do ZIP.
-2. **`Accept: application/json` devolve `406`.** O endpoint só serve `application/zip`. É o header que qualquer um poria num coletor de "JSON". O coletor manda `Accept: */*` e não repete tentativa em 4xx.
+2. **`Accept: application/json` devolve `406`.** O endpoint só serve `application/zip`. É o header que qualquer um poria num coletor de "JSON". O coletor manda `Accept: */*` e não repete tentativa em 4xx (exceto 408 e 429, que são transitórios por definição).
 3. **`dataFimVigencia` tem duas convenções de ausência no mesmo arquivo:** em `listaAtributos` a chave é omitida; em `detalhesAtributos` vem como `""`. Comparar string vazia como data inverte o filtro.
 4. **Os bytes do ZIP mudam a cada requisição** (o mtime interno é o instante da geração). Para detectar mudança, hasheie o JSON descompactado ou compare `versao` — nunca o ZIP.
 5. **O nome do arquivo interno muda todo dia** (`ATRIBUTOS_POR_NCM_AAAA_MM_DD.json`). Use `namelist()[0]`.
-6. **`?data=AAAA_MM_DD` é silenciosamente ignorado.** Não existe histórico oficial — inclusive um valor inválido devolve o arquivo de hoje sem erro. Por isso `dados/historico/` existe.
-7. 493 KB comprimidos viram 16,5 MB; pico de ~200 MB no `json.loads`.
+6. **`?data=AAAA_MM_DD` é silenciosamente ignorado.** Não existe histórico oficial — inclusive um valor inválido devolve o arquivo de hoje sem erro. Por isso `dados/historico/` e o release `bruto-<versao>` existem.
+7. 493 KB comprimidos viram 16,5 MB; pico de ~200 MB no `json.loads`. O `completo.json` derivado tem ~4,8 MB (~120 KB comprimidos).
 8. Sem `Content-Length` (chunked). Sem rate limit observado — ainda assim, colete 1×/dia.
-9. **Página de manutenção servida com `200`** vira `BadZipFile` sem explicação. O coletor confere o `Content-Type` antes de tentar descompactar.
+9. **Página de manutenção servida com `200`** vira `BadZipFile` sem explicação. O coletor confere o `Content-Type` (e a assinatura `PK` dos primeiros bytes) antes de tentar descompactar.
 
 ## Por que guardamos o histórico
 
@@ -84,7 +158,7 @@ A janela é de 30 **dias**, não dos 30 últimos arquivos: um dia perdido por fa
 | `form_embed_url` | `""` | usa o `mailto:`; se preenchido, tem precedência e embute um iframe |
 | `goatcounter_code` | `""` | sem analítica; zero cadastro não distingue "ninguém quer" de "ninguém viu" |
 | `dominio` | `""` | sem `CNAME`, ou seja, sem domínio próprio |
-| `indexnow_key` | `""` | sem arquivo de chave, e o passo de ping do workflow não roda |
+| `indexnow_key` | `""` | sem arquivo de chave; o passo de ping do workflow roda, mas `indexnow.py` encerra cedo sem tocar a rede |
 
 Com domínio próprio, deixe `base_path` vazio e preencha `dominio`. Isso também é o que faz o `robots.txt` funcionar: em Pages de projeto ele é servido sob `/<repo>/robots.txt`, e crawler só lê na raiz da origem — que pertence à GitHub, não a você.
 
@@ -94,6 +168,10 @@ Com domínio próprio, deixe `base_path` vazio e preencha `dominio`. Isso també
 
 Projeto independente, sem vínculo com a Receita Federal ou com o Portal Único.
 
+## Contribuir e segurança
+
+Regras de código, testes e branches em [CONTRIBUTING.md](CONTRIBUTING.md). Para relatar um problema de segurança, [SECURITY.md](SECURITY.md).
+
 ## Licença
 
-Código sob licença MIT — ver [LICENSE](LICENSE). Os dados vêm de fonte pública do governo federal e não são objeto de direito autoral deste projeto; use à vontade, sem exigência de crédito.
+Código sob licença MIT — ver [LICENSE](LICENSE). Os dados vêm de fonte pública do governo federal e não são objeto de direito autoral deste projeto; use à vontade, sem exigência de crédito — ver [LICENSE-DADOS.md](LICENSE-DADOS.md).

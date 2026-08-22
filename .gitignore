@@ -11,12 +11,18 @@ desktop.ini
 .env
 *.zip
 site/
-# Mapa completo NCM -> atributos: ~3 MB regenerados todo dia, consumidos pelo
-# gerador no mesmo run do CI. Versionar isso seria 3 MB de churn diario.
+# Mapa completo NCM -> atributos: ~4,8 MB regenerados todo dia, consumidos
+# pelo gerador no mesmo run do CI. Versionar isso seria 4,8 MB de churn
+# diário. O render sem coleta (render.yml) o recupera do cache do Actions.
 dados/completo.json
+# O ZIP oficial do dia, como veio da Receita (já coberto por *.zip, mas
+# explícito para ninguém achar que foi esquecido). Os bytes mudam a cada
+# pedido; o que vale guardar é o Release bruto-<versao> que o workflow cria.
+dados/bruto.zip
 *.tmp
+.coverage
+.ruff_cache/
 
-# Rascunhos de divulgacao: avaliacao franca de terceiros que estao sendo
-# abordados, num repositorio publico. Fica no disco, sai do repo.
-# (git rm nao desfaz o historico: o conteudo segue nos commits a2a6310 e 2f342e3.)
+# Rascunhos de divulgação: avaliação franca de terceiros que estão sendo
+# abordados, num repositório público. Fica no disco, sai do repo.
 divulgacao/
