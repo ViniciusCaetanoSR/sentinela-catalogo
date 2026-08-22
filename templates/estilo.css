@@ -1,0 +1,286 @@
+/* Folha única do site. Servida como arquivo externo com hash no nome:
+   inline, ela era 12,3 KB repetidos em cada uma das páginas - 72% dos bytes
+   do site. A requisição a mais não existe: a folha de fontes já era externa
+   e bloqueante, e esta entra no mesmo lugar. */
+
+/* Transicao entre paginas: dissolve em vez do flash branco do navegador.
+   Uma linha, e onde nao ha suporte a navegacao segue normal. E crossfade,
+   nao deslocamento - por isso fica de pe sob prefers-reduced-motion.
+   Precisa ser lida antes do primeiro render, por isso vive nesta folha
+   bloqueante e nao num arquivo adiado. */
+@view-transition{navigation:auto}
+
+:root{
+  --ground:#fbfaf9; --surface:#f4f2f0; --surface-2:#efebe7;
+  --ink:#1e1e1e; --muted:#4a453f; --faint:#6b655e;
+  --rule:#e5e1dd; --rule-strong:#c9c3bb;
+  --escuro:#1e1e1e; --escuro-2:#2a2a2a; --escuro-rule:#3a3a3a;
+  --sobre-escuro:#fbfaf9; --sobre-escuro-fraco:#8f8880; --sobre-escuro-nav:#c9c3bb;
+  /* laranja da marca: preenchimento. laranja escuro: texto e link. */
+  --marca:#ff7f27; --marca-hover:#ff9349; --marca-tint:#fff2e8; --marca-borda:#f0d9c4;
+  --accent:#a34a08; --accent-forte:#7d3505;
+  --alerta:#a34a08; --alerta-bg:#fff2e8;
+  --ok:#1c5c33; --ok-bg:#eaf3ec; --ok-borda:#cfe3d5;
+  /* urgencia: so acende abaixo de 7 dias, por isso significa algo */
+  --urgente:#b3200f;
+  --sans:Figtree,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+  font-size:17px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 24px 72px}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--accent-forte)}
+h1,h2,h3{line-height:1.1;margin:0;text-wrap:balance}
+h1{font-size:clamp(1.9rem,4.6vw,2.9rem);letter-spacing:-.035em;font-weight:600}
+h2{font-size:1.35rem;margin-top:48px;letter-spacing:-.02em;font-weight:600}
+h3{font-size:1.05rem;margin-top:30px;font-weight:600}
+p{margin:14px 0}
+code{font-family:var(--mono);font-size:.92em}
+
+/* Texto so para leitor de tela. Usado em caption, no status do botao
+   copiar e no cabecalho vazio da tabela de orgao. */
+.oculto{position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+
+/* Pular para o conteudo: aparece so quando recebe foco. */
+.pular{position:absolute;left:-9999px;top:0;z-index:10;background:var(--ground);
+  color:var(--accent-forte);padding:12px 18px;border:2px solid var(--accent-forte);
+  border-radius:0 0 9px 0;font-weight:600}
+.pular:focus{left:0}
+
+/* ---------------------------------------------------------- barra da marca */
+header.topo{background:var(--escuro);padding:14px 0;margin-bottom:44px}
+header.topo .wrap{padding-bottom:0;display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+.marca{display:flex;align-items:center;gap:11px;font-weight:600;font-size:1rem;
+  color:var(--sobre-escuro);letter-spacing:-.01em}
+.marca:hover{color:var(--sobre-escuro)}
+.marca span{color:var(--sobre-escuro-fraco);font-weight:400}
+/* marca: tres faixas encurtando = o prazo diminuindo */
+.marca i{display:block;height:4px;background:var(--marca)}
+.marca i:nth-child(1){width:100%}
+.marca i:nth-child(2){width:68%}
+.marca i:nth-child(3){width:36%}
+.selo{width:30px;height:30px;flex:0 0 auto;border-radius:6px;background:var(--escuro-2);
+  padding:7px 6px;display:flex;flex-direction:column;justify-content:space-between}
+nav.topo-nav{margin-left:auto;display:flex;gap:24px;font-size:.88rem}
+nav.topo-nav a{color:var(--sobre-escuro-nav);transition:color .14s ease}
+nav.topo-nav a:hover{color:var(--marca)}
+
+/* -------------------------------------------------------------- trilha */
+/* O BreadcrumbList do JSON-LD existia sem breadcrumb visivel na pagina.
+   O Google descarta o rich result nesse caso - e o leitor ficava sem
+   caminho de volta para o indice. */
+nav.trilha{margin:0 0 18px}
+nav.trilha ol{list-style:none;display:flex;flex-wrap:wrap;gap:6px;padding:0;margin:0;
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.04em;color:var(--faint)}
+nav.trilha li:not(:last-child)::after{content:"/";margin-left:6px;color:var(--rule-strong)}
+nav.trilha a{color:var(--faint);text-decoration:underline}
+nav.trilha a:hover{color:var(--accent-forte)}
+nav.trilha li[aria-current]{color:var(--ink)}
+
+/* ------------------------------------------------------------------ textos */
+.chapeu{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint);display:block;margin-bottom:16px}
+.lede{font-size:1.14rem;line-height:1.5;color:var(--muted);margin:18px 0 0;max-width:56ch}
+
+/* ------------------------------------------------------------------ tabelas */
+.rolagem{overflow-x:auto;margin:30px 0}
+.rolagem:focus-visible{outline:2px solid var(--accent-forte);outline-offset:3px}
+table{border-collapse:collapse;width:100%;font-size:.92rem;min-width:560px}
+caption{text-align:left;font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--faint);padding-bottom:10px}
+th,td{text-align:left;padding:13px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+th:first-child,td:first-child{padding-left:0}
+th:last-child,td:last-child{padding-right:0}
+thead th{border-bottom:1px solid var(--rule-strong);font-family:var(--mono);
+  font-size:.69rem;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);font-weight:500;white-space:nowrap}
+tbody tr{transition:background .14s ease}
+tbody tr:hover{background:#fff7f0}
+tbody tr:last-child td{border-bottom:none}
+td.ncm,td.cod{white-space:nowrap}
+td.ncm a,td.cod a,td.ncm .sem-pagina,td.cod .sem-pagina{display:inline-block;
+  font-family:var(--mono);font-size:.84rem;
+  font-variant-numeric:tabular-nums;color:var(--ink);background:var(--surface);
+  border:1px solid var(--rule);border-radius:6px;padding:3px 8px;
+  transition:border-color .14s ease,background .14s ease}
+td.ncm .sem-pagina,td.cod .sem-pagina{color:var(--faint);background:transparent}
+td.ncm a:hover,td.cod a:hover{border-color:var(--marca);background:var(--marca-tint)}
+td.data{font-family:var(--mono);white-space:nowrap;font-variant-numeric:tabular-nums}
+/* .num era emitido pelo gerador sem nenhuma regra: os totais de NCM saiam
+   alinhados a esquerda e sem tabular-nums. */
+td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+td.data{text-align:right}
+thead th.data{text-align:right}
+
+/* Opcoes validas mostradas dentro da linha da tabela, para os atributos que
+   nao tem pagina propria - o conteudo mudou de lugar, nao sumiu. */
+details.opcoes{margin-top:8px}
+details.opcoes summary{font-family:var(--mono);font-size:.72rem;color:var(--accent);
+  cursor:pointer}
+details.opcoes summary:focus-visible{outline:2px solid var(--accent-forte);outline-offset:2px}
+details.opcoes dl{margin:10px 0 0;display:grid;grid-template-columns:auto 1fr;
+  gap:5px 14px;font-size:.85rem}
+details.opcoes dt{font-family:var(--mono);color:var(--accent);font-weight:600}
+details.opcoes dd{margin:0}
+.orienta{margin:6px 0 0;font-size:.86rem;color:var(--muted);max-width:60ch}
+
+/* --------------------------------------------------------------- etiquetas */
+.tag{display:inline-block;font-family:var(--mono);font-size:.66rem;font-weight:600;
+  letter-spacing:.07em;text-transform:uppercase;padding:3px 8px;
+  border:1px solid currentColor;border-radius:5px;white-space:nowrap}
+.tag.muda{color:var(--accent-forte);background:var(--alerta-bg)}
+.tag.obr{color:var(--ok);background:var(--ok-bg)}
+.tag.opc{color:var(--faint);border-color:var(--rule-strong)}
+
+/* ------------------------------------------------------------------ avisos */
+.aviso{border-left:3px solid var(--marca);background:var(--alerta-bg);
+  padding:18px 22px;margin:30px 0;border-radius:0 10px 10px 0}
+.aviso strong{color:var(--accent-forte)}
+.aviso ul{margin:10px 0 0;padding-left:20px}
+
+/* ------------------------------------------- contagem (ver camada 2 no md) */
+.contagem{display:grid;grid-template-columns:1fr minmax(280px,360px);gap:48px;
+  align-items:start;margin:0 0 8px}
+.contagem-cartao{background:var(--escuro);border-radius:12px;padding:28px 30px;
+  animation:cartao .6s cubic-bezier(.22,.61,.36,1) .1s both}
+.contagem-topo{display:flex;align-items:baseline;gap:12px;margin:0}
+/* A largura e reservada pelo numero FINAL (--digitos). Sem isso a contagem
+   ia de 1 para 2 digitos e empurrava o "dias" para o lado no meio da
+   animacao - e este e o elemento LCP da home. */
+.contagem-num{color:var(--marca);font-size:6.2rem;line-height:.85;font-weight:600;
+  letter-spacing:-.05em;font-variant-numeric:tabular-nums;
+  display:inline-block;min-width:calc(var(--digitos,1) * .62em);text-align:right}
+.contagem-un{color:var(--marca);font-size:1.25rem;font-weight:500;line-height:1.3;
+  white-space:nowrap}
+.contagem-fatos{margin:22px 0 0;padding-top:18px;border-top:1px solid var(--escuro-rule);
+  display:grid;gap:9px;font-family:var(--mono);font-size:.76rem;color:#e8e3dd}
+.contagem-fatos div{display:flex;justify-content:space-between;gap:16px}
+.contagem-fatos span{color:var(--sobre-escuro-fraco)}
+.prazo{display:inline-block;width:64px;height:4px;border-radius:99px;
+  background:var(--rule);overflow:hidden;vertical-align:middle;margin-left:8px}
+/* O preenchimento acompanha a REVELACAO da linha, nao o load. Antes era
+   animation no load: com as linhas reveladas ao scroll, a barra enchia
+   enquanto a linha estava invisivel e chegava cheia na tela.
+   Sem JS (sem a classe .js) a largura final se aplica direto. */
+.prazo i{display:block;height:4px;background:var(--marca);width:var(--w,0)}
+.js .prazo i{width:0;transition:width .7s cubic-bezier(.22,.61,.36,1) .12s}
+.js .revelado .prazo i{width:var(--w,0)}
+/* Copiar codigo: utilidade antes de estetica. Codigo com pontos e chato
+   de selecionar com o mouse, e essa gente cola isso no sistema dela. */
+.copiar{font:inherit;font-size:.72rem;letter-spacing:0;text-transform:none;
+  color:var(--accent);background:none;border:1px solid var(--faint);
+  border-radius:5px;padding:1px 7px;margin-left:8px;cursor:pointer;
+  vertical-align:middle;transition:background .14s ease,border-color .14s ease}
+.copiar:hover{background:var(--marca-tint);border-color:var(--accent)}
+.copiar[data-feito]{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+html:not(.js) .copiar{display:none}
+
+.prazo-txt{font-family:var(--sans);font-size:.78rem;font-weight:600;color:var(--accent)}
+.prazo.urgente i{background:var(--urgente)}
+.prazo.urgente + .prazo-txt,.prazo-txt.urgente{color:var(--urgente)}
+.cod-inline{font-family:var(--mono);font-size:.78rem;color:var(--faint)}
+
+/* ------------------------------------------------------------------ captura */
+.captura{border:1px solid var(--marca-borda);background:var(--marca-tint);
+  border-radius:12px;padding:30px;margin:48px 0}
+.captura h2{margin-top:0;font-size:1.2rem}
+.captura p{color:var(--muted);font-size:.95rem}
+.captura iframe{width:100%;border:0;min-height:320px}
+.botao{display:inline-block;background:var(--marca);color:var(--ink);font-weight:600;
+  padding:13px 20px;border-radius:9px;font-size:1rem;
+  transition:background .16s ease,transform .16s ease,box-shadow .16s ease}
+.botao:hover{background:var(--marca-hover);color:var(--ink);transform:translateY(-1px);
+  box-shadow:0 5px 16px rgba(255,127,39,.30)}
+.botao:active{transform:translateY(0);box-shadow:none}
+/* O anel era var(--marca) - a MESMA cor do fundo do .botao, 1,00:1. O unico
+   elemento que este projeto existe para fazer clicar nao tinha indicador de
+   foco visivel. O laranja fica so sobre o cabecalho escuro, onde passa. */
+a:focus-visible,.botao:focus-visible,button:focus-visible,summary:focus-visible{
+  outline:2px solid var(--accent-forte);outline-offset:2px}
+header.topo a:focus-visible{outline-color:var(--marca)}
+.pendente{font-family:var(--mono);font-size:.8rem;color:var(--faint);
+  border:1px dashed var(--rule-strong);border-radius:9px;padding:14px;background:var(--ground)}
+
+/* -------------------------------------------------------------------- listas */
+ul.limpa{list-style:none;padding:0;margin:20px 0;display:flex;flex-wrap:wrap;gap:8px}
+ul.limpa li a,ul.limpa li .sem-pagina{display:inline-block;font-family:var(--mono);
+  font-size:.82rem;padding:5px 10px;border:1px solid var(--rule);
+  background:var(--surface);border-radius:6px;color:var(--ink);
+  transition:border-color .14s ease,background .14s ease}
+ul.limpa li .sem-pagina{color:var(--faint);background:transparent}
+ul.limpa li a:hover{border-color:var(--marca);background:var(--marca-tint)}
+dl.dominio{margin:18px 0;display:grid;grid-template-columns:auto 1fr;gap:9px 18px;font-size:.93rem}
+dl.dominio dt{font-family:var(--mono);color:var(--accent);font-weight:600}
+dl.dominio dd{margin:0}
+.paginacao{display:flex;flex-wrap:wrap;gap:8px;margin:28px 0;font-family:var(--mono);
+  font-size:.8rem}
+.paginacao a,.paginacao strong{padding:5px 10px;border:1px solid var(--rule);
+  border-radius:6px;background:var(--surface)}
+.paginacao strong{background:var(--marca-tint);border-color:var(--marca-borda)}
+
+/* -------------------------------------------------------------------- rodape */
+.fonte{margin-top:56px;padding-top:20px;border-top:1px solid var(--rule);
+  font-family:var(--mono);font-size:.72rem;color:var(--faint);line-height:1.8}
+.fonte a{color:var(--faint);text-decoration:underline}
+footer.rodape{background:var(--escuro);margin-top:64px;padding:28px 0;
+  font-family:var(--mono);font-size:.72rem;color:var(--sobre-escuro-fraco)}
+footer.rodape .wrap{padding-bottom:0}
+
+/* ----------------------------------------------------------------- animacao */
+@keyframes sobe{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+@keyframes cartao{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:none}}
+main .chapeu{animation:sobe .45s ease-out both}
+main h1{animation:sobe .5s ease-out .07s both}
+main .lede{animation:sobe .5s ease-out .14s both}
+main .aviso{animation:sobe .5s ease-out .21s both}
+/* Revelacao ao scroll. O opacity:0 so vale com JS vivo (classe .js no
+   <html>) - sem isso, quem navega sem JS veria a pagina em branco. */
+.js .revelar{opacity:0;transform:translateY(8px)}
+.js .revelar.revelado{opacity:1;transform:none;
+  transition:opacity .45s ease-out,transform .45s cubic-bezier(.22,.61,.36,1)}
+
+@media (prefers-reduced-motion:reduce){
+  /* Politica: sai o MOVIMENTO, ficam esmaecimento e preenchimento.
+     A preferencia existe para deslocamento, zoom e parallax - nao para um
+     opacity nem para uma barra enchendo. Matar transition em bloco, como
+     estava antes, apagava tambem o que nao incomoda ninguem: a barra de
+     prazo ficava vazia e a revelacao virava um corte seco.
+     Por isso aqui se mata animation (os keyframes com translateY e scale)
+     e o transform - nao a transition inteira. */
+  *{animation:none!important}
+  .botao:hover,.botao:active{transform:none!important}
+  .js .revelar,.js .revelar.revelado{transform:none!important}
+}
+
+@media (max-width:640px){
+  body{font-size:16px}
+  .wrap{padding:0 18px 56px}
+  header.topo .wrap{gap:12px}
+  nav.topo-nav{margin-left:0;width:100%;gap:18px;font-size:.84rem}
+  .contagem{grid-template-columns:1fr;gap:24px}
+  .contagem-num{font-size:4rem}
+  dl.dominio{grid-template-columns:1fr;gap:2px 0}
+  dl.dominio dd{margin-bottom:10px}
+
+  /* Tabela vira cartao. Com min-width:560px numa tela de 360, a coluna
+     "Situacao" - que e a resposta que a pessoa veio buscar - nascia sempre
+     fora da tela, atras de um arrasto horizontal sem nenhuma pista de que
+     existia. Cada celula passa a anunciar o proprio rotulo. */
+  .rolagem{overflow-x:visible}
+  table{min-width:0}
+  thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  tbody tr{display:block;border:1px solid var(--rule);border-radius:10px;
+    padding:12px 14px;margin-bottom:10px}
+  tbody tr:last-child td{border-bottom:1px solid var(--rule)}
+  td{display:block;border:0;padding:3px 0}
+  td:last-child{border-bottom:none;padding-right:0}
+  td:first-child{padding-left:0}
+  td::before{content:attr(data-rot);display:block;font-family:var(--mono);
+    font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);margin-bottom:2px}
+  td[data-rot=""]::before,td:not([data-rot])::before{content:none}
+  td.data,td.num{text-align:left}
+}
