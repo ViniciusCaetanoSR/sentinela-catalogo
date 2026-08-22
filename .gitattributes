@@ -1,1 +1,7 @@
 * text=auto eol=lf
+*.woff2 binary
+*.png binary
+# JSON escrito por maquina: fora do diff e fora da barra de linguagens.
+dados/** linguist-generated=true
+dados/atributos.json -diff
+dados/lastmod.json -diff

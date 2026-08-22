@@ -1,0 +1,57 @@
+name: Vigia
+
+# Interruptor de homem morto. O workflow de coleta so avisa quando FALHA -
+# ele nao tem como avisar que deixou de rodar. O GitHub desativa cron de
+# repositorio parado, e nesse caso o site fica no ar, bonito, servindo a
+# data de semanas atras sem nenhum sinal de que parou.
+
+on:
+  schedule:
+    - cron: "0 15 * * *"   # 12:00 BRT, seis horas depois da coleta
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conferir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: O snapshot esta velho?
+        id: idade
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from datetime import date
+          with open("dados/ultimo.json", encoding="utf-8") as f:
+              ref = date.fromisoformat(json.load(f)["data_referencia"])
+          dias = (date.today() - ref).days
+          print(f"dias={dias}")
+          print(f"referencia={ref.isoformat()}")
+          PY
+
+      - name: Avisar se passou de dois dias
+        if: fromJSON(steps.idade.outputs.dias) > 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          titulo="A coleta parou de rodar"
+          existente=$(gh issue list --repo "$REPO" --state open \
+            --search "\"$titulo\" in:title" --json number --jq '.[0].number')
+          corpo="O ultimo snapshot e de ${{ steps.idade.outputs.referencia }} - ha ${{ steps.idade.outputs.dias }} dias.
+
+          O workflow de coleta nao esta falhando: ele nao esta rodando. Causa
+          provavel e o GitHub ter desativado o cron por inatividade no
+          repositorio. O site continua no ar servindo dado velho."
+          if [ -n "$existente" ]; then
+            gh issue comment "$existente" --repo "$REPO" --body "$corpo"
+          else
+            gh issue create --repo "$REPO" --title "$titulo" --body "$corpo"
+          fi

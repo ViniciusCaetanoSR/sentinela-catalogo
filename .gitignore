@@ -1,5 +1,22 @@
 __pycache__/
 *.pyc
 .venv/
+venv/
+env/
 .DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+.env
+*.zip
 site/
+# Mapa completo NCM -> atributos: ~3 MB regenerados todo dia, consumidos pelo
+# gerador no mesmo run do CI. Versionar isso seria 3 MB de churn diario.
+dados/completo.json
+*.tmp
+
+# Rascunhos de divulgacao: avaliacao franca de terceiros que estao sendo
+# abordados, num repositorio publico. Fica no disco, sai do repo.
+# (git rm nao desfaz o historico: o conteudo segue nos commits a2a6310 e 2f342e3.)
+divulgacao/
