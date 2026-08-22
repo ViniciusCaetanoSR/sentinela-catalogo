@@ -1,7 +1,7 @@
 """
-Gera o site estatico a partir de dados/ultimo.json.
+Gera o site estático a partir de dados/último.json.
 
-Nao acessa a rede. Roda depois do coletor, e pode ser rodado sozinho para
+Não acessa a rede. Roda depois do coletor, e pode ser rodado sozinho para
 recompor o site sem baixar nada de novo.
 
 Saida em site/:
@@ -72,7 +72,7 @@ def br(iso):
 
 
 def plural(n, singular, plural_form):
-    """1 -> 'vinculo', 2 -> 'vinculos'. Evita 'Sao 1 vinculos em 1 NCMs'."""
+    """1 -> 'vínculo', 2 -> 'vínculos'. Evita 'São 1 vínculos em 1 NCMs'."""
     return singular if abs(n) == 1 else plural_form
 
 
@@ -110,7 +110,7 @@ def bloco_formulario(cfg):
     email = cfg.get("contato_email")
     if email:
         assunto = "Quero acompanhar minhas NCMs"
-        # Sem escapes de nova linha aqui: montado por join para nao quebrar
+        # Sem escapes de nova linha aqui: montado por join para não quebrar
         # em nenhuma camada de shell ou heredoc.
         corpo = chr(10).join([
             "Minhas NCMs (uma por linha):", "", "", "",
@@ -148,7 +148,7 @@ def bloco_jsonld(dados):
 
 
 def trilha(cfg, itens):
-    """BreadcrumbList - o dado estruturado com retorno visivel no resultado."""
+    """BreadcrumbList - o dado estruturado com retorno visível no resultado."""
     base = (cfg.get("base_url", "").rstrip("/")
             + cfg.get("base_path", "").rstrip("/"))
     return {
@@ -175,10 +175,10 @@ def pagina(cfg, snapshot, corpo, titulo, descricao, caminho, jsonld=None):
         "versao": esc(snapshot["contagens"]["versao"]),
         "formulario": bloco_formulario(cfg),
         "analytics": bloco_analytics(cfg) + bloco_jsonld(jsonld),
-        "feed": "/feed.xml",  # o prefixo de base_path e aplicado depois
+        "feed": "/feed.xml",  # o prefixo de base_path é aplicado depois
     })
-    # Em repositorio de projeto o Pages serve sob /<repo>/, entao todo link
-    # interno precisa do prefixo. Com dominio proprio, base_path fica vazio.
+    # Em repositório de projeto o Pages serve sob /<repo>/, então todo link
+    # interno precisa do prefixo. Com domínio próprio, base_path fica vazio.
     prefixo = cfg.get("base_path", "").rstrip("/")
     if prefixo:
         html = html.replace('href="/', f'href="{prefixo}/')
@@ -198,7 +198,7 @@ def tabela_viradas(viradas, referencia):
         prazo = "hoje" if dias == 0 else ("amanhã" if dias == 1 else f"em {dias} dias")
         # A barra da a leitura visual do prazo: 30 dias enche, hoje quase vazia.
         largura = min(100, max(6, round(dias / 30 * 100)))
-        # Urgencia acende so abaixo de 7 dias - por isso significa algo.
+        # Urgência acende só abaixo de 7 dias - por isso significa algo.
         urg = " urgente" if dias <= 7 else ""
         linhas.append(
             f'<tr>'
@@ -243,9 +243,9 @@ def tabela_atributos_ncm(atributos):
 def bloco_historico(ncms_com_pagina=frozenset()):
     """O que mudou nos ultimos 30 dias, montado do arquivo diario.
 
-    O endpoint oficial ignora ?data= e nao serve versoes passadas: sem este
-    arquivo local nao existe 'o que mudou'. E tambem o que impede a pagina de
-    ficar vazia entre um lote de viradas e o proximo.
+    O endpoint oficial ignora ?data= e não serve versões passadas: sem este
+    arquivo local não existe 'o que mudou'. E também o que impede a página de
+    ficar vazia entre um lote de viradas e o próximo.
     """
     if not os.path.isdir(DIR_HISTORICO):
         return ""
@@ -276,7 +276,7 @@ def bloco_historico(ncms_com_pagina=frozenset()):
             for v in sorted(novas, key=lambda x: x["vira_obrigatorio_em"]))
         partes.append(f"<h3>Viradas novas</h3><ul>{itens}</ul>")
     if sumiram:
-        # NCM que saiu da lista nao tem mais pagina gerada - nao linkar.
+        # NCM que saiu da lista não tem mais página gerada - não linkar.
         itens = "".join(
             (f'<li><a href="/ncm/{n}/">{esc(n)}</a> — {esc(c)}</li>'
              if n in ncms_com_pagina else f'<li>{esc(n)} — {esc(c)}</li>')
@@ -288,7 +288,7 @@ def bloco_historico(ncms_com_pagina=frozenset()):
     return "".join(partes)
 
 
-# ---------------------------------------------------------------- paginas
+# ---------------------------------------------------------------- páginas
 
 def gerar_index(cfg, s):
     ref = date.fromisoformat(s["data_referencia"])
@@ -548,10 +548,10 @@ def gerar_atributos(cfg, s, catalogo):
 
 
 def gerar_orgaos(cfg, s, catalogo):
-    """Uma pagina por orgao anuente.
+    """Uma página por órgão anuente.
 
     Cria um eixo de consulta novo ("atributos anvisa duimp") e resolve o
-    problema de um indice unico com mais de mil itens.
+    problema de um indice único com mais de mil itens.
     """
     caminhos = []
     virando = {a["codigo"] for a in catalogo["atributos"] if a.get("nas_viradas")}
@@ -625,9 +625,9 @@ def gerar_orgaos(cfg, s, catalogo):
 def gerar_fontes(cfg):
     """Copia as fontes auto-hospedadas para site/.
 
-    Auto-hospedadas de proposito: a pagina de privacidade afirma que o site
-    nao faz requisicao a terceiro, e carregar do Google Fonts contradiria
-    isso. Sao variaveis - um arquivo por subset serve todos os pesos.
+    Auto-hospedadas de proposito: a página de privacidade afirma que o site
+    não faz requisição a terceiro, e carregar do Google Fonts contradiria
+    isso. São variaveis - um arquivo por subset serve todos os pesos.
     """
     if not os.path.isdir(DIR_FONTES):
         return
@@ -639,7 +639,7 @@ def gerar_fontes(cfg):
         if nome.endswith(".css"):
             with open(origem, encoding="utf-8") as f:
                 css = f.read()
-            # O prefixo de base_path nao alcanca arquivo externo ao HTML.
+            # O prefixo de base_path não alcanca arquivo externo ao HTML.
             if prefixo:
                 css = css.replace("url(/fontes/", f"url({prefixo}/fontes/")
             with open(os.path.join(destino, nome), "w",
@@ -650,7 +650,7 @@ def gerar_fontes(cfg):
 
 
 def gerar_cname(cfg):
-    """O Pages exige CNAME na raiz publicada, e o site/ e apagado a cada build."""
+    """O Pages exige CNAME na raiz publicada, e o site/ é apagado a cada build."""
     dominio = cfg.get("dominio")
     if dominio:
         escrever("CNAME", dominio + chr(10))
@@ -664,11 +664,11 @@ def gerar_indexnow(cfg):
 
 
 def gerar_privacidade(cfg, s):
-    """Pagina de privacidade.
+    """Página de privacidade.
 
-    O site nao coleta nada no servidor (o mailto abre o cliente do visitante),
-    mas roda analitica - e para um publico de compliance a ausencia da pagina
-    custa mais credibilidade do que o esforco de escreve-la.
+    O site não coleta nada no servidor (o mailto abre o cliente do visitante),
+    mas roda analítica - e para um público de compliance a ausência da página
+    custa mais credibilidade do que o esforco de escreve-lá.
     """
     corpo = template("privacidade.html")
     return [escrever("privacidade/index.html", pagina(
@@ -682,8 +682,8 @@ def gerar_privacidade(cfg, s):
 def gerar_feed(cfg, s):
     """RSS das viradas agendadas.
 
-    E a unica forma de push que este teste entrega: quem acompanha comex por
-    leitor de feed passa a ser avisado sem precisar visitar a pagina.
+    E a única forma de push que este teste entrega: quem acompanha comex por
+    leitor de feed passa a ser avisado sem precisar visitar a página.
     """
     base = (cfg.get("base_url", "").rstrip("/")
             + cfg.get("base_path", "").rstrip("/"))

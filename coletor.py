@@ -1,9 +1,9 @@
 """
-Coletor do Catalogo de Produtos do Portal Unico (Siscomex).
+Coletor do Catálogo de Produtos do Portal Único (Siscomex).
 
-Baixa a relacao publica de atributos por NCM, extrai as viradas agendadas
-- atributos hoje opcionais com data marcada para virar obrigatorios - e
-grava um snapshot diario enxuto.
+Baixa a relação publica de atributos por NCM, extrai as viradas agendadas
+- atributos hoje opcionais com data marcada para virar obrigatórios - e
+grava um snapshot diário enxuto.
 
 Regra do produto:
     obrigatorio == false AND dataFimVigencia > hoje (America/Sao_Paulo)
@@ -23,8 +23,8 @@ import zipfile
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-# O ?perfil=PUBLICO e obrigatorio: sem ele o servidor devolve 307 e, se o
-# redirect nao for seguido, 304 bytes de HTML no lugar do ZIP.
+# O ?perfil=PUBLICO é obrigatório: sem ele o servidor devolve 307 e, se o
+# redirect não for seguido, 304 bytes de HTML no lugar do ZIP.
 URL = ("https://portalunico.siscomex.gov.br/cadatributos/api"
        "/atributo-ncm/download/json?perfil=PUBLICO")
 
@@ -39,15 +39,15 @@ RE_DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _sem_data(texto):
-    """Ignora a linha de data ao comparar - so o conteudo importa."""
+    """Ignora a linha de data ao comparar - só o conteúdo importa."""
     nl = chr(10)
     return nl.join(l for l in texto.split(nl) if "atualizado_em" not in l)
 
 
 def hoje_br():
-    """A data de referencia da regra, no fuso de Brasilia.
+    """A data de referência da regra, no fuso de Brasilia.
 
-    O arquivo e regenerado pelo servidor por volta de 00:0x horario de
+    O arquivo é regenerado pelo servidor por volta de 00:0x horário de
     Brasilia. Usar UTC deslocaria a janela perto da meia-noite.
     """
     return datetime.now(FUSO).date()
@@ -55,8 +55,8 @@ def hoje_br():
 
 def baixar(url=URL, timeout=90):
     """Devolve (bytes_do_json, metadados_http)."""
-    # Nao enviar Accept: application/json - o endpoint devolve 406.
-    # Ele so serve application/zip.
+    # Não enviar Accept: application/json - o endpoint devolve 406.
+    # Ele só serve application/zip.
     req = urllib.request.Request(url, headers={"Accept": "*/*"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         bruto = r.read()
@@ -77,8 +77,8 @@ def baixar(url=URL, timeout=90):
     conteudo = z.read(nomes[0])
     meta["bytes_json"] = len(conteudo)
 
-    # Os bytes do ZIP mudam a cada requisicao porque o mtime interno e o
-    # instante da geracao. So o JSON descompactado tem hash estavel.
+    # Os bytes do ZIP mudam a cada requisição porque o mtime interno é o
+    # instante da geração. Só o JSON descompactado tem hash estavel.
     meta["sha256_json"] = hashlib.sha256(conteudo).hexdigest()
     return conteudo, meta
 
@@ -89,11 +89,11 @@ def carregar(conteudo):
 
 
 def _fim_vigencia(vinculo):
-    """Le dataFimVigencia tolerando as DUAS convencoes de ausencia.
+    """Le dataFimVigencia tolerando as DUAS convenções de ausência.
 
-    Em listaAtributos a chave e omitida quando nao ha fim.
+    Em listaAtributos a chave é omitida quando não há fim.
     Em detalhesAtributos ela vem como string vazia.
-    Nunca comparar "" como data: "" < qualquer data e True.
+    Nunca comparar "" como data: "" < qualquer data é True.
     """
     valor = vinculo.get("dataFimVigencia")
     if not valor:
@@ -104,7 +104,7 @@ def _fim_vigencia(vinculo):
 
 
 def dicionario_atributos(dados):
-    """codigo -> detalhe do atributo (nome, tipo, dominio, orgaos)."""
+    """código -> detalhe do atributo (nome, tipo, domínio, órgãos)."""
     return {a["codigo"]: a for a in dados.get("detalhesAtributos", [])}
 
 
@@ -120,9 +120,9 @@ def viradas(dados, referencia=None):
             fim = _fim_vigencia(vinculo)
             if fim is None or fim <= ref:
                 continue
-            # A clausula obrigatorio == false nao filtra nada hoje: todos os
-            # vinculos com dataFimVigencia sao opcionais. Mantida porque passa
-            # a filtrar no dia em que o orgao publicar uma virada ja obrigatoria.
+            # A cláusula obrigatorio == false não filtra nada hoje: todos os
+            # vínculos com dataFimVigencia são opcionais. Mantida porque passa
+            # a filtrar no dia em que o órgão publicar uma virada já obrigatória.
             if vinculo.get("obrigatorio") is not False:
                 continue
 
@@ -146,7 +146,7 @@ MAX_DOMINIO = 120
 
 
 def detalhe_publico(detalhe):
-    """Os campos do dicionario de atributos que a pagina usa."""
+    """Os campos do dicionário de atributos que a página usa."""
     if not detalhe:
         return {}
     dominio = detalhe.get("dominio") or []
@@ -159,9 +159,9 @@ def detalhe_publico(detalhe):
         "forma_preenchimento": detalhe.get("formaPreenchimento"),
         "orgaos": detalhe.get("orgaos") or [],
         "multivalorado": detalhe.get("multivalorado"),
-        # dominio[].codigo e string e preserva zero a esquerda ("01").
-        # Truncado: ATT_14500 ("Municipio do destino final") tem 5.570 opcoes,
-        # que renderizariam uma pagina de 187 mil caracteres.
+        # dominio[].codigo é string e preserva zero a esquerda ("01").
+        # Truncado: ATT_14500 ("Município do destino final") tem 5.570 opções,
+        # que renderizariam uma página de 187 mil caracteres.
         "dominio": [
             {"codigo": d.get("codigo"), "descricao": d.get("descricao")}
             for d in dominio[:MAX_DOMINIO]
@@ -172,8 +172,8 @@ def detalhe_publico(detalhe):
 def ncms_afetadas(dados, lista_viradas):
     """Ficha completa de cada NCM que tem virada agendada.
 
-    Mostra TODOS os atributos da NCM, marcando quais viram obrigatorios -
-    o importador precisa ver o contexto, nao so a linha que muda.
+    Mostra TODOS os atributos da NCM, marcando quais viram obrigatórios -
+    o importador precisa ver o contexto, não só a linha que muda.
     """
     alvo = {v["ncm"] for v in lista_viradas}
     virando = {(v["ncm"], v["atributo"]): v["vira_obrigatorio_em"] for v in lista_viradas}
@@ -204,17 +204,17 @@ def ncms_afetadas(dados, lista_viradas):
 
 
 def tem_conteudo(detalhe, total_ncms):
-    """O filtro de qualidade das paginas por atributo.
+    """O filtro de qualidade das páginas por atributo.
 
-    Exige conteudo REAL, nao a mera existencia do registro: sem isso
-    entrariam centenas de paginas do tipo "Detalhamento" com duas linhas e
-    uma NCM - exatamente o padrao de conteudo fino que penaliza o site todo.
+    Exige conteúdo REAL, não a mera existência do registro: sem isso
+    entrariam centenas de páginas do tipo "Detalhamento" com duas linhas e
+    uma NCM - exatamente o padrão de conteúdo fino que penaliza o site todo.
     """
     if not detalhe:
         return False
-    # Prosa oficial e o sinal forte: 823 atributos tem orientacao ou definicao.
-    # Sem prosa, so entra quem tem lista de opcoes substantiva OU alcance largo -
-    # um atributo em 20+ NCMs e encontrado por muita gente mesmo sem texto.
+    # Prosa oficial é o sinal forte: 823 atributos têm orientação ou definição.
+    # Sem prosa, só entra quem tem lista de opções substantiva OU alcance largo -
+    # um atributo em 20+ NCMs é encontrado por muita gente mesmo sem texto.
     return bool(
         (detalhe.get("orientacaoPreenchimento") or "").strip()
         or (detalhe.get("definicao") or "").strip()
@@ -224,7 +224,7 @@ def tem_conteudo(detalhe, total_ncms):
 
 
 def indice_por_atributo(dados):
-    """codigo do atributo -> lista de NCMs vinculadas."""
+    """código do atributo -> lista de NCMs vinculadas."""
     por_atributo = {}
     for ncm in dados.get("listaNcm", []):
         for vinculo in ncm.get("listaAtributos", []):
@@ -233,10 +233,10 @@ def indice_por_atributo(dados):
 
 
 def atributos_publicaveis(dados, lista_viradas, max_ncms=60):
-    """Todo atributo que merece pagina propria.
+    """Todo atributo que merece página própria.
 
-    Entram, sempre: os das viradas e os citados por NCM afetada - senao as
-    paginas daquelas NCMs linkariam para o vazio. Os demais entram pelo
+    Entram, sempre: os das viradas e os citados por NCM afetada - senão as
+    páginas daquelas NCMs linkariam para o vazio. Os demais entram pelo
     filtro de qualidade.
     """
     dic = dicionario_atributos(dados)
@@ -265,10 +265,10 @@ def atributos_publicaveis(dados, lista_viradas, max_ncms=60):
 
 
 def orgaos(atributos):
-    """Um agrupamento por orgao anuente.
+    """Um agrupamento por órgão anuente.
 
-    Cria um eixo de navegacao e de consulta novo ("atributos anvisa duimp") e
-    evita um indice unico com centenas de itens.
+    Cria um eixo de navegação e de consulta novo ("atributos anvisa duimp") e
+    evita um indice único com centenas de itens.
     """
     por_orgao = {}
     for a in atributos:
@@ -294,7 +294,7 @@ def orgaos(atributos):
 
 
 def contagens(dados):
-    """Numeros de controle. Servem de teste de aceitacao do coletor."""
+    """Números de controle. Servem de teste de aceitação do coletor."""
     ncms = dados.get("listaNcm", [])
     vinculos = [v for n in ncms for v in n.get("listaAtributos", [])]
     hoje = hoje_br().isoformat()
@@ -330,9 +330,9 @@ def coletar():
         "ncms_afetadas": ncms_afetadas(dados, vs),
     }
 
-    # O detalhe dos atributos sai do snapshot diario: sao centenas de itens e
-    # eles quase nunca mudam. Reescrever so quando o conteudo muda mantem o
-    # commit diario pequeno.
+    # O detalhe dos atributos sai do snapshot diário: são centenas de itens e
+    # eles quase nunca mudam. Reescrever só quando o conteúdo muda mantem o
+    # commit diário pequeno.
     publicaveis = atributos_publicaveis(dados, vs)
     catalogo = {
         "versao": dados.get("versao"),
@@ -377,8 +377,8 @@ ESPERADO = {
 def verificar(snapshot):
     """Compara com o que foi medido no reconhecimento de 20/08/2026.
 
-    Divergencia aqui e leitura errada da estrutura, nao dado errado -
-    ate que o proprio arquivo mude, o que e esperado com o tempo.
+    Divergência aqui é leitura errada da estrutura, não dado errado -
+    até que o próprio arquivo mude, o que é esperado com o tempo.
     """
     c = snapshot["contagens"]
     linhas = []
