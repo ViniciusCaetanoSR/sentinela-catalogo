@@ -20,12 +20,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import coletor  # noqa: E402
 import indexnow  # noqa: E402
 
-CFG = {"base_url": "https://exemplo.test", "base_path": "/repo",
-       "indexnow_key": "abc123"}
-URLS = ["https://exemplo.test/repo/",
-        "https://exemplo.test/repo/ncm/8415.10.90/"]
-SEM_REDE = mock.patch("urllib.request.urlopen",
-                      side_effect=AssertionError("o teste tocou a rede"))
+CFG = {"base_url": "https://exemplo.test", "base_path": "/repo", "indexnow_key": "abc123"}
+URLS = ["https://exemplo.test/repo/", "https://exemplo.test/repo/ncm/8415.10.90/"]
+SEM_REDE = mock.patch(
+    "urllib.request.urlopen", side_effect=AssertionError("o teste tocou a rede")
+)
 
 
 def _resposta(status=200):
@@ -37,7 +36,8 @@ def _resposta(status=200):
 
 def _erro_http(codigo, corpo=b""):
     return urllib.error.HTTPError(
-        indexnow.ENDPOINT, codigo, "Unprocessable Entity", {}, io.BytesIO(corpo))
+        indexnow.ENDPOINT, codigo, "Unprocessable Entity", {}, io.BytesIO(corpo)
+    )
 
 
 class Ambiente(unittest.TestCase):
@@ -50,9 +50,10 @@ class Ambiente(unittest.TestCase):
         self.arq_raiz = os.path.join(self.tmp.name, "mudancas.txt")
         self.arq_site = os.path.join(self.tmp.name, "site", "mudancas.txt")
         os.makedirs(os.path.dirname(self.arq_site))
-        for p in (mock.patch.object(indexnow, "ARQ_CONFIG", self.arq_config),
-                  mock.patch.object(indexnow, "CANDIDATOS",
-                                    (self.arq_raiz, self.arq_site))):
+        for p in (
+            mock.patch.object(indexnow, "ARQ_CONFIG", self.arq_config),
+            mock.patch.object(indexnow, "CANDIDATOS", (self.arq_raiz, self.arq_site)),
+        ):
             p.start()
             self.addCleanup(p.stop)
 
@@ -163,8 +164,9 @@ class TestLerUrls(unittest.TestCase):
 
     def test_ignora_linhas_em_branco_e_espacos(self):
         caminho = self._grava("a.txt", "\nhttps://x.test/a/  \n\n https://x.test/b/\n")
-        self.assertEqual(indexnow.ler_urls((caminho,)),
-                         ["https://x.test/a/", "https://x.test/b/"])
+        self.assertEqual(
+            indexnow.ler_urls((caminho,)), ["https://x.test/a/", "https://x.test/b/"]
+        )
 
     def test_prefere_mudancas_da_raiz_ao_de_site(self):
         # No CI o artefato cai na raiz; um site/ antigo local não pode vencer.
@@ -172,8 +174,9 @@ class TestLerUrls(unittest.TestCase):
         site = self._grava("site.txt", "https://x.test/do-site/\n")
         self.assertEqual(indexnow.ler_urls((raiz, site)), ["https://x.test/da-raiz/"])
         inexistente = os.path.join(self.tmp.name, "nao-existe.txt")
-        self.assertEqual(indexnow.ler_urls((inexistente, site)),
-                         ["https://x.test/do-site/"])
+        self.assertEqual(
+            indexnow.ler_urls((inexistente, site)), ["https://x.test/do-site/"]
+        )
 
     def test_sem_candidato_devolve_lista_vazia(self):
         self.assertEqual(indexnow.ler_urls((os.path.join(self.tmp.name, "x"),)), [])
@@ -208,8 +211,7 @@ class TestPost(Ambiente):
         self.assertEqual(req.get_method(), "POST")
         corpo = json.loads(req.data.decode("utf-8"))
         self.assertEqual(corpo, indexnow.montar_payload(CFG, "abc123", URLS))
-        self.assertEqual(req.get_header("Content-type"),
-                         "application/json; charset=utf-8")
+        self.assertEqual(req.get_header("Content-type"), "application/json; charset=utf-8")
 
     def test_manda_user_agent(self):
         # Sem User-Agent vai "Python-urllib/3.x", o primeiro padrão que um
@@ -226,8 +228,9 @@ class TestPost(Ambiente):
 
     def test_poda_acima_do_maximo_manda_so_a_primeira(self):
         self.config()
-        lista = [f"https://exemplo.test/repo/ncm/{i:08d}/"
-                 for i in range(indexnow.MAXIMO + 1)]
+        lista = [
+            f"https://exemplo.test/repo/ncm/{i:08d}/" for i in range(indexnow.MAXIMO + 1)
+        ]
         self.mudancas(lista)
         with mock.patch("urllib.request.urlopen", return_value=_resposta()) as u:
             codigo, saida, _ = self.roda()
@@ -238,8 +241,7 @@ class TestPost(Ambiente):
 
     def test_exatamente_o_maximo_vai_inteiro(self):
         self.config()
-        lista = [f"https://exemplo.test/repo/ncm/{i:08d}/"
-                 for i in range(indexnow.MAXIMO)]
+        lista = [f"https://exemplo.test/repo/ncm/{i:08d}/" for i in range(indexnow.MAXIMO)]
         self.mudancas(lista)
         with mock.patch("urllib.request.urlopen", return_value=_resposta()) as u:
             self.roda()

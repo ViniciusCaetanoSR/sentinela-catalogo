@@ -19,8 +19,10 @@ import urllib.request
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 ARQ_CONFIG = os.path.join(RAIZ, "config.json")
 # No CI o arquivo chega pelo artefato, na raiz; localmente ele está em site/.
-CANDIDATOS = (os.path.join(RAIZ, "mudancas.txt"),
-              os.path.join(RAIZ, "site", "mudancas.txt"))
+CANDIDATOS = (
+    os.path.join(RAIZ, "mudancas.txt"),
+    os.path.join(RAIZ, "site", "mudancas.txt"),
+)
 ENDPOINT = "https://api.indexnow.org/IndexNow"
 # Espelha TETO_INDEXNOW do gerador, não o protocolo: o IndexNow aceita até
 # 10 000 URLs por POST. Acima de 200 o build não "mudou conteúdo", foi refeito
@@ -31,8 +33,9 @@ MAXIMO = 200
 # Cópia literal de coletor.AGENTE. Não importar coletor: o import arrastaria
 # zoneinfo e os caminhos de dados para um script que só faz um POST, e um
 # erro lá derrubaria o ping por motivo alheio a ele. Se mudar lá, mude aqui.
-AGENTE = ("SentinelaDoCatalogo/0.1.0 "
-          "(+https://github.com/viniciuscaetanosr/sentinela-catalogo)")
+AGENTE = (
+    "SentinelaDoCatalogo/0.1.0 (+https://github.com/viniciuscaetanosr/sentinela-catalogo)"
+)
 # Quantos bytes do corpo de erro vão para o log. O IndexNow responde 422 com
 # um JSON curto dizendo o motivo (chave não encontrada, host divergente);
 # sem ele o código sozinho não diz o que corrigir.
@@ -74,16 +77,22 @@ def problema_de_configuracao(cfg, lista):
     """
     base = cfg.get("base_url", "")
     if not base:
-        return ("base_url vazio em config.json - sem ele o keyLocation não tem "
-                "onde ficar; nada a submeter.")
+        return (
+            "base_url vazio em config.json - sem ele o keyLocation não tem "
+            "onde ficar; nada a submeter."
+        )
     partes = urllib.parse.urlsplit(lista[0])
     if partes.scheme != "https" or not partes.netloc:
-        return (f"primeira URL de mudancas.txt não é absoluta https: {lista[0]!r} "
-                "- o gerador precisa de base_url para escrevê-las; nada a submeter.")
+        return (
+            f"primeira URL de mudancas.txt não é absoluta https: {lista[0]!r} "
+            "- o gerador precisa de base_url para escrevê-las; nada a submeter."
+        )
     if _host(base) != partes.netloc:
-        return (f"base_url aponta para {_host(base)!r} mas as URLs são de "
-                f"{partes.netloc!r} - o keyLocation ficaria fora do host; nada a "
-                "submeter.")
+        return (
+            f"base_url aponta para {_host(base)!r} mas as URLs são de "
+            f"{partes.netloc!r} - o keyLocation ficaria fora do host; nada a "
+            "submeter."
+        )
     return None
 
 
@@ -142,17 +151,22 @@ def main():
 
     lista, descartadas = filtrar_host(lista)
     if descartadas:
-        print(f"{len(descartadas)} URL(s) fora do host {_host(lista[0])} "
-              f"descartada(s); a primeira: {descartadas[0]}", file=sys.stderr)
+        print(
+            f"{len(descartadas)} URL(s) fora do host {_host(lista[0])} "
+            f"descartada(s); a primeira: {descartadas[0]}",
+            file=sys.stderr,
+        )
     if len(lista) > MAXIMO:
         print(f"{len(lista)} URLs é lote demais - submetendo só a primeira.")
         lista = lista[:1]
 
     corpo = json.dumps(montar_payload(cfg, chave, lista)).encode("utf-8")
     req = urllib.request.Request(
-        ENDPOINT, data=corpo, method="POST",
-        headers={"Content-Type": "application/json; charset=utf-8",
-                 "User-Agent": AGENTE})
+        ENDPOINT,
+        data=corpo,
+        method="POST",
+        headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": AGENTE},
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             print(f"IndexNow respondeu {r.status} para {len(lista)} URLs.")

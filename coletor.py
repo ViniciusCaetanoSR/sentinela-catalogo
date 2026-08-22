@@ -32,13 +32,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # O ?perfil=PUBLICO é obrigatório: sem ele o servidor devolve 307 e, se o
 # redirect não for seguido, 304 bytes de HTML no lugar do ZIP.
-URL = ("https://portalunico.siscomex.gov.br/cadatributos/api"
-       "/atributo-ncm/download/json?perfil=PUBLICO")
+URL = (
+    "https://portalunico.siscomex.gov.br/cadatributos/api"
+    "/atributo-ncm/download/json?perfil=PUBLICO"
+)
 
 # Identifica o coletor para quem olhar o log do servidor. Sem isso vai
 # "Python-urllib/3.x", que é o primeiro padrão que um WAF corta.
-AGENTE = (f"SentinelaDoCatalogo/{__version__} "
-          "(+https://github.com/viniciuscaetanosr/sentinela-catalogo)")
+AGENTE = (
+    f"SentinelaDoCatalogo/{__version__} "
+    "(+https://github.com/viniciuscaetanosr/sentinela-catalogo)"
+)
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 DIR_DADOS = os.path.join(RAIZ, "dados")
@@ -47,7 +51,8 @@ DIR_DADOS = os.path.join(RAIZ, "dados")
 # um diretório qualquer: os testes de ponta a ponta gravam num diretório
 # temporário, e sem isto precisariam remendar seis constantes do módulo.
 Caminhos = collections.namedtuple(
-    "Caminhos", "dados historico ultimo atributos completo bruto")
+    "Caminhos", "dados historico ultimo atributos completo bruto"
+)
 
 
 def caminhos_em(dir_dados):
@@ -89,8 +94,13 @@ AMOSTRA_CORPO = 200
 # (IncompleteRead e ConnectionResetError NÃO são URLError - escapavam do
 # retry e custavam o dia com um traceback), ZIP truncado e as checagens de
 # conteúdo do próprio coletor (página de manutenção servida com 200).
-TRANSITORIAS = (urllib.error.URLError, OSError, http.client.HTTPException,
-                zipfile.BadZipFile, RuntimeError)
+TRANSITORIAS = (
+    urllib.error.URLError,
+    OSError,
+    http.client.HTTPException,
+    zipfile.BadZipFile,
+    RuntimeError,
+)
 # 4xx com que o servidor diz "agora não", e não "você errou".
 REPETIVEIS_4XX = (408, 429)
 # Esperas entre tentativas, em segundos: ~5 min no total, cabe nos 15 min
@@ -112,8 +122,15 @@ SCHEMA = 1
 # fatos sobre a execução ("o ZIP de hoje é outro", "o catálogo foi reescrito
 # agora"), não sobre o catálogo - numa segunda rodada do mesmo dia eles
 # mudam sem que nada tenha mudado.
-VOLATEIS = ("coletado_em", "bytes_zip", "disposition", "catalogo_reescrito",
-            "bruto_novo", "conteudo_identico", "portao_ignorado")
+VOLATEIS = (
+    "coletado_em",
+    "bytes_zip",
+    "disposition",
+    "catalogo_reescrito",
+    "bruto_novo",
+    "conteudo_identico",
+    "portao_ignorado",
+)
 
 # Quantas datas inválidas entram no snapshot e no log. Ver datas_invalidas().
 MAX_DATAS_LOGADAS = 20
@@ -149,8 +166,11 @@ FUSO = _fuso()
 def _sem_volateis(texto):
     """Ignora as linhas voláteis ao comparar - só o conteúdo importa."""
     nl = chr(10)
-    return nl.join(linha for linha in texto.split(nl)
-                   if not any('"' + c + '"' in linha for c in VOLATEIS))
+    return nl.join(
+        linha
+        for linha in texto.split(nl)
+        if not any('"' + c + '"' in linha for c in VOLATEIS)
+    )
 
 
 def hoje_br():
@@ -245,8 +265,11 @@ def baixar(url=URL, timeout=90, tentativas=5):
             espera = ESPERAS[min(tentativa, len(ESPERAS)) - 1]
             if sugerida is not None:
                 espera = sugerida
-            print(f"tentativa {tentativa}/{tentativas} falhou ({ultimo_erro!r}); "
-                  f"nova tentativa em {espera}s", file=sys.stderr)
+            print(
+                f"tentativa {tentativa}/{tentativas} falhou ({ultimo_erro!r}); "
+                f"nova tentativa em {espera}s",
+                file=sys.stderr,
+            )
             time.sleep(espera)
     raise ultimo_erro
 
@@ -260,8 +283,7 @@ def _amostra(corpo):
 def _baixar_uma_vez(url, timeout):
     # Não enviar Accept: application/json - o endpoint devolve 406.
     # Ele só serve application/zip.
-    req = urllib.request.Request(url, headers={"Accept": "*/*",
-                                               "User-Agent": AGENTE})
+    req = urllib.request.Request(url, headers={"Accept": "*/*", "User-Agent": AGENTE})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         # Um byte além do teto: é o que distingue "coube" de "passou".
         bruto = r.read(MAX_ZIP + 1)
@@ -279,8 +301,10 @@ def _baixar_uma_vez(url, timeout):
     # bytes mágicos valem como prova quando o Content-Type vier errado.
     tipo = (meta["content_type"] or "").lower()
     if "zip" not in tipo and bruto[:4] != ASSINATURA_ZIP:
-        raise RuntimeError("esperava application/zip, veio "
-                           f"{tipo!r} ({len(bruto)} bytes): {_amostra(bruto)}")
+        raise RuntimeError(
+            "esperava application/zip, veio "
+            f"{tipo!r} ({len(bruto)} bytes): {_amostra(bruto)}"
+        )
 
     z = zipfile.ZipFile(io.BytesIO(bruto))
     nomes = z.namelist()
@@ -335,7 +359,7 @@ def validar_forma(dados):
         problemas.append("versao ausente ou não é string")
 
     lista = dados.get("listaNcm")
-    for ncm in (lista if isinstance(lista, list) else []):
+    for ncm in lista if isinstance(lista, list) else []:
         if not isinstance(ncm, dict):
             problemas.append(f"item de listaNcm não é objeto: {ncm!r:.60}")
             continue
@@ -354,18 +378,21 @@ def validar_forma(dados):
             if obrigatorio is not None and not isinstance(obrigatorio, bool):
                 problemas.append(
                     f"obrigatorio={obrigatorio!r:.40} na NCM {codigo}, atributo "
-                    f"{v.get('codigo')} (deveria ser booleano)")
+                    f"{v.get('codigo')} (deveria ser booleano)"
+                )
 
     detalhes = dados.get("detalhesAtributos")
-    for d in (detalhes if isinstance(detalhes, list) else []):
+    for d in detalhes if isinstance(detalhes, list) else []:
         if not isinstance(d, dict):
             problemas.append(f"item de detalhesAtributos não é objeto: {d!r:.60}")
             continue
         for chave in ("orgaos", "dominio"):
             valor = d.get(chave)
             if valor is not None and not isinstance(valor, list):
-                problemas.append(f"{chave}={valor!r:.40} no atributo "
-                                 f"{d.get('codigo')} (deveria ser lista)")
+                problemas.append(
+                    f"{chave}={valor!r:.40} no atributo "
+                    f"{d.get('codigo')} (deveria ser lista)"
+                )
 
     if problemas:
         extra = len(problemas) - MAX_PROBLEMAS_LISTADOS
@@ -452,8 +479,7 @@ def vinculos_de(ncm):
 
 def dicionario_atributos(dados):
     """código -> detalhe do atributo (nome, tipo, domínio, órgãos)."""
-    return {a["codigo"]: a for a in dados.get("detalhesAtributos") or []
-            if a.get("codigo")}
+    return {a["codigo"]: a for a in dados.get("detalhesAtributos") or [] if a.get("codigo")}
 
 
 def nome_de(detalhe):
@@ -484,16 +510,18 @@ def viradas(dados, referencia=None):
                 continue
 
             detalhe = dic.get(vinculo["codigo"], {})
-            achados.append({
-                "ncm": codigo_ncm,
-                "atributo": vinculo["codigo"],
-                "vira_obrigatorio_em": fim,
-                "vigente_desde": vinculo.get("dataInicioVigencia"),
-                "modalidade": vinculo.get("modalidade"),
-                "nome": nome_de(detalhe),
-                "orgaos": detalhe.get("orgaos") or [],
-                "forma_preenchimento": detalhe.get("formaPreenchimento"),
-            })
+            achados.append(
+                {
+                    "ncm": codigo_ncm,
+                    "atributo": vinculo["codigo"],
+                    "vira_obrigatorio_em": fim,
+                    "vigente_desde": vinculo.get("dataInicioVigencia"),
+                    "modalidade": vinculo.get("modalidade"),
+                    "nome": nome_de(detalhe),
+                    "orgaos": detalhe.get("orgaos") or [],
+                    "forma_preenchimento": detalhe.get("formaPreenchimento"),
+                }
+            )
 
     achados.sort(key=lambda x: (x["vira_obrigatorio_em"], x["ncm"], x["atributo"]))
     return achados
@@ -547,16 +575,23 @@ def ncms_afetadas(dados, lista_viradas):
         atributos = []
         for vinculo in vinculos_de(ncm):
             detalhe = dic.get(vinculo["codigo"], {})
-            atributos.append({
-                "codigo": vinculo["codigo"],
-                "nome": nome_de(detalhe),
-                "obrigatorio": vinculo.get("obrigatorio"),
-                "modalidade": vinculo.get("modalidade"),
-                "orgaos": detalhe.get("orgaos") or [],
-                "vira_obrigatorio_em": virando.get((codigo, vinculo["codigo"])),
-            })
-        atributos.sort(key=lambda a: (a["vira_obrigatorio_em"] is None,
-                                      not a["obrigatorio"], a["codigo"]))
+            atributos.append(
+                {
+                    "codigo": vinculo["codigo"],
+                    "nome": nome_de(detalhe),
+                    "obrigatorio": vinculo.get("obrigatorio"),
+                    "modalidade": vinculo.get("modalidade"),
+                    "orgaos": detalhe.get("orgaos") or [],
+                    "vira_obrigatorio_em": virando.get((codigo, vinculo["codigo"])),
+                }
+            )
+        atributos.sort(
+            key=lambda a: (
+                a["vira_obrigatorio_em"] is None,
+                not a["obrigatorio"],
+                a["codigo"],
+            )
+        )
         saida.append({"ncm": codigo, "atributos": atributos})
 
     saida.sort(key=lambda x: x["ncm"])
@@ -630,16 +665,17 @@ def atributos_publicaveis(dados, lista_viradas, max_ncms=60):
     for codigo, ncms in sorted(por_atributo.items()):
         detalhe = dic.get(codigo)
         if codigo not in obrigatorios:
-            if not merece_pagina(detalhe, len(ncms),
-                                 repeticoes[assinatura_prosa(detalhe)]):
+            if not merece_pagina(detalhe, len(ncms), repeticoes[assinatura_prosa(detalhe)]):
                 continue
         item = detalhe_publico(detalhe)
-        item.update({
-            "codigo": codigo,
-            "total_ncms": len(ncms),
-            "ncms": sorted(ncms)[:max_ncms],
-            "nas_viradas": codigo in nas_viradas,
-        })
+        item.update(
+            {
+                "codigo": codigo,
+                "total_ncms": len(ncms),
+                "ncms": sorted(ncms)[:max_ncms],
+                "nas_viradas": codigo in nas_viradas,
+            }
+        )
         saida.append(item)
     return saida
 
@@ -662,8 +698,7 @@ def mapa_completo(dados, com_pagina):
         if not vinculos:
             continue
         ncms[ncm["codigoNcm"]] = [
-            [v["codigo"], v.get("obrigatorio"), v.get("modalidade")]
-            for v in vinculos
+            [v["codigo"], v.get("obrigatorio"), v.get("modalidade")] for v in vinculos
         ]
         usados |= {v["codigo"] for v in vinculos}
 
@@ -677,8 +712,10 @@ def mapa_completo(dados, com_pagina):
             if orientacao:
                 item["t"] = orientacao
             if dominio:
-                item["d"] = [[d.get("codigo"), d.get("descricao")]
-                             for d in dominio[:MAX_DOMINIO_INLINE]]
+                item["d"] = [
+                    [d.get("codigo"), d.get("descricao")]
+                    for d in dominio[:MAX_DOMINIO_INLINE]
+                ]
                 item["dt"] = len(dominio)
         atributos[codigo] = item
 
@@ -694,13 +731,15 @@ def orgaos(atributos):
     por_orgao = {}
     for a in atributos:
         for orgao in a.get("orgaos") or ["Sem órgão declarado"]:
-            por_orgao.setdefault(orgao, []).append({
-                "codigo": a["codigo"],
-                "nome": a.get("nome"),
-                "forma_preenchimento": a.get("forma_preenchimento"),
-                "total_ncms": a.get("total_ncms", 0),
-                "nas_viradas": a.get("nas_viradas", False),
-            })
+            por_orgao.setdefault(orgao, []).append(
+                {
+                    "codigo": a["codigo"],
+                    "nome": a.get("nome"),
+                    "forma_preenchimento": a.get("forma_preenchimento"),
+                    "total_ncms": a.get("total_ncms", 0),
+                    "nas_viradas": a.get("nas_viradas", False),
+                }
+            )
     saida = []
     usados = set()
     for orgao, lista in sorted(por_orgao.items()):
@@ -712,12 +751,14 @@ def orgaos(atributos):
             s, n = f"{base}-{n}", n + 1
         usados.add(s)
         lista.sort(key=lambda x: (-x["total_ncms"], x["codigo"]))
-        saida.append({
-            "orgao": orgao,
-            "slug": s,
-            "total_atributos": len(lista),
-            "atributos": lista,
-        })
+        saida.append(
+            {
+                "orgao": orgao,
+                "slug": s,
+                "total_atributos": len(lista),
+                "atributos": lista,
+            }
+        )
     saida.sort(key=lambda x: -x["total_atributos"])
     return saida
 
@@ -740,7 +781,8 @@ def contagens(dados, referencia=None):
         # Presente mas não booleano ("false" como string): é o caso em que
         # viradas() zera em silêncio. None conta como ausente.
         "obrigatorio_nao_booleano": sum(
-            1 for v in vinculos
+            1
+            for v in vinculos
             if v.get("obrigatorio") is not None
             and not isinstance(v.get("obrigatorio"), bool)
         ),
@@ -761,8 +803,7 @@ def contagens(dados, referencia=None):
 # com que comparar. Bem abaixo do real: serve para pegar catástrofe, não
 # para pegar variação. "obrigatorios" entra porque é o número que zera
 # quando o campo muda de tipo - e aí o site publica "nada agendado".
-PISO = {"ncms": 5000, "vinculos": 30000, "atributos_distintos": 500,
-        "obrigatorios": 5000}
+PISO = {"ncms": 5000, "vinculos": 30000, "atributos_distintos": 500, "obrigatorios": 5000}
 # As contagens comparadas com o snapshot anterior (base rolante).
 ROLANTES = ("ncms", "vinculos", "atributos_distintos", "obrigatorios")
 # Quanto a base pode encolher de um dia para o outro antes de virar suspeita.
@@ -801,8 +842,10 @@ def conferir_sanidade(atual, anterior=None, aceitar_queda=False):
 
     invalidas = atual.get("datas_invalidas", 0)
     if invalidas and invalidas > atual.get("vinculos", 0) * LIMITE_DATAS_INVALIDAS:
-        fatais.append(f"datas_invalidas={invalidas}, acima de "
-                      f"{LIMITE_DATAS_INVALIDAS:.1%} dos vínculos")
+        fatais.append(
+            f"datas_invalidas={invalidas}, acima de "
+            f"{LIMITE_DATAS_INVALIDAS:.1%} dos vínculos"
+        )
 
     quedas = []
     if anterior:
@@ -811,15 +854,15 @@ def conferir_sanidade(atual, anterior=None, aceitar_queda=False):
             if not antes or agora is None:
                 continue
             if agora < antes * (1 - QUEDA_MAXIMA):
-                quedas.append(f"{chave} caiu de {antes} para {agora} "
-                              f"(mais de {QUEDA_MAXIMA:.0%})")
+                quedas.append(
+                    f"{chave} caiu de {antes} para {agora} (mais de {QUEDA_MAXIMA:.0%})"
+                )
     if quedas and not aceitar_queda:
         fatais.extend(quedas)
         quedas = []
 
     if fatais:
-        raise RuntimeError("colheita degenerada, nada foi gravado: "
-                           + "; ".join(fatais))
+        raise RuntimeError("colheita degenerada, nada foi gravado: " + "; ".join(fatais))
     return quedas
 
 
@@ -912,7 +955,8 @@ def coletar(referencia=None, dir_dados=None):
     contagens_antes = _contagens_de(anterior)
     c = contagens(dados, ref)
     quedas_aceitas = conferir_sanidade(
-        c, contagens_antes, aceitar_queda=aceitar_queda_por_ambiente())
+        c, contagens_antes, aceitar_queda=aceitar_queda_por_ambiente()
+    )
     for queda in quedas_aceitas:
         avisar(f"queda aceita por SENTINELA_ACEITAR_QUEDA=1: {queda}")
 
@@ -923,8 +967,10 @@ def coletar(referencia=None, dir_dados=None):
     # hoje, o servidor ainda não regenerou - a coleta vale, mas é de ontem.
     meta["arquivo_do_dia"] = data_do_arquivo(meta.get("arquivo_interno")) == ref.isoformat()
     if not meta["arquivo_do_dia"]:
-        avisar(f"arquivo interno {meta.get('arquivo_interno')!r} não é do dia "
-               f"{ref.isoformat()}")
+        avisar(
+            f"arquivo interno {meta.get('arquivo_interno')!r} não é do dia "
+            f"{ref.isoformat()}"
+        )
 
     sha_anterior = ((anterior or {}).get("http") or {}).get("sha256_json")
     vs = viradas(dados, ref)
@@ -977,8 +1023,10 @@ def coletar(referencia=None, dir_dados=None):
 
     corpo_snapshot = json.dumps(snapshot, ensure_ascii=False, indent=1)
     caminho = os.path.join(cam.historico, f"{ref.isoformat()}.json")
-    escritos = [_reescrever_se_mudou(caminho, corpo_snapshot),
-                _reescrever_se_mudou(cam.ultimo, corpo_snapshot)]
+    escritos = [
+        _reescrever_se_mudou(caminho, corpo_snapshot),
+        _reescrever_se_mudou(cam.ultimo, corpo_snapshot),
+    ]
     snapshot["gravado"] = any(escritos)
     return snapshot
 
@@ -990,13 +1038,14 @@ def coletar(referencia=None, dir_dados=None):
 def invariantes(c):
     return [
         ("versao e string", isinstance(c.get("versao"), str)),
-        ("detalhes == distintos",
-         c.get("detalhes_atributos") == c.get("atributos_distintos")),
+        (
+            "detalhes == distintos",
+            c.get("detalhes_atributos") == c.get("atributos_distintos"),
+        ),
         ("nenhum registro descartado", c.get("descartados") == 0),
         ("obrigatorio sempre booleano", c.get("obrigatorio_nao_booleano") == 0),
         ("nenhuma dataFimVigencia invalida", c.get("datas_invalidas") == 0),
-        ("nenhum inicio de vigencia futuro",
-         c.get("inicio_vigencia_futuro") == 0),
+        ("nenhum inicio de vigencia futuro", c.get("inicio_vigencia_futuro") == 0),
     ]
 
 
@@ -1006,8 +1055,10 @@ def main():
     except urllib.error.HTTPError as e:
         print(f"ERRO HTTP {e.code}: {e.reason}", file=sys.stderr)
         if e.code == 406:
-            print("406 = header Accept errado. O endpoint só serve application/zip.",
-                  file=sys.stderr)
+            print(
+                "406 = header Accept errado. O endpoint só serve application/zip.",
+                file=sys.stderr,
+            )
         return 1
     except urllib.error.URLError as e:
         print(f"ERRO de rede: {e.reason}", file=sys.stderr)
@@ -1023,9 +1074,11 @@ def main():
 
     c = snapshot["contagens"]
     v = snapshot["viradas"]
-    print(f"Coletado em {snapshot['coletado_em']} | versao {c['versao']} | "
-          f"{snapshot['http']['bytes_zip']} bytes zip -> "
-          f"{snapshot['http']['bytes_json']} bytes json")
+    print(
+        f"Coletado em {snapshot['coletado_em']} | versao {c['versao']} | "
+        f"{snapshot['http']['bytes_zip']} bytes zip -> "
+        f"{snapshot['http']['bytes_json']} bytes json"
+    )
     print(f"{c['ncms']} NCMs, {c['vinculos']} vinculos, {c['obrigatorios']} obrigatorios")
     print()
     print("Invariantes:")
@@ -1043,22 +1096,28 @@ def main():
     # ficam de fora - senão o aviso dispararia todo dia depois de um corte.
     futuros = c.get("com_fim_vigencia_futuro", 0)
     if futuros > 0 and not v:
-        avisar(f"{futuros} vínculos com dataFimVigencia futura e nenhuma "
-               "virada agendada: confira se o filtro ainda enxerga o arquivo")
+        avisar(
+            f"{futuros} vínculos com dataFimVigencia futura e nenhuma "
+            "virada agendada: confira se o filtro ainda enxerga o arquivo"
+        )
     print()
     if snapshot.get("conteudo_identico"):
         print("JSON idêntico ao da coleta anterior.")
     situacao = "reescrito" if snapshot.get("catalogo_reescrito") else "inalterado"
-    print(f"{snapshot.get('atributos_publicaveis', 0)} atributos publicaveis em "
-          f"{snapshot.get('orgaos', 0)} orgaos (catalogo {situacao})")
+    print(
+        f"{snapshot.get('atributos_publicaveis', 0)} atributos publicaveis em "
+        f"{snapshot.get('orgaos', 0)} orgaos (catalogo {situacao})"
+    )
     if not snapshot.get("gravado"):
         print("Nada mudou hoje: snapshot identico ao anterior, nada reescrito.")
     print()
     print(f"{len(v)} viradas agendadas (obrigatorio=false E dataFimVigencia >= hoje):")
     for x in v:
         orgao = "/".join(x["orgaos"]) or "-"
-        print(f"  {x['vira_obrigatorio_em']}  {x['ncm']}  {x['atributo']:<12} "
-              f"{orgao:<10} {x['nome'] or ''}")
+        print(
+            f"  {x['vira_obrigatorio_em']}  {x['ncm']}  {x['atributo']:<12} "
+            f"{orgao:<10} {x['nome'] or ''}"
+        )
     return 0
 
 

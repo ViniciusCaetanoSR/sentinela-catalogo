@@ -18,8 +18,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import coletor  # noqa: E402
 
-FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "fixtures", "amostra.json")
+FIXTURE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "amostra.json"
+)
 # A mesma data que a fixture usa em ATT_HOJE, para exercitar a fronteira.
 HOJE = date(2026, 8, 22)
 
@@ -41,8 +42,8 @@ class TestFimVigencia(unittest.TestCase):
 
     def test_data_valida(self):
         self.assertEqual(
-            coletor._fim_vigencia({"dataFimVigencia": "2026-08-30"}),
-            "2026-08-30")
+            coletor._fim_vigencia({"dataFimVigencia": "2026-08-30"}), "2026-08-30"
+        )
 
     def test_data_com_formato_certo_mas_inexistente(self):
         # O regex antigo aceitava 30 de fevereiro; só quebrava no gerador,
@@ -92,14 +93,27 @@ class TestViradas(unittest.TestCase):
         self.assertNotIn("ATT_VAZIO", self.codigos)
 
     def test_ordena_por_data_ncm_atributo(self):
-        chaves = [(v["vira_obrigatorio_em"], v["ncm"], v["atributo"])
-                  for v in self.vs]
+        chaves = [(v["vira_obrigatorio_em"], v["ncm"], v["atributo"]) for v in self.vs]
         self.assertEqual(chaves, sorted(chaves))
 
     def test_vinculo_sem_detalhe_nao_quebra(self):
-        vs = coletor.viradas({"listaNcm": [{"codigoNcm": "1", "listaAtributos": [
-            {"codigo": "X", "obrigatorio": False,
-             "dataFimVigencia": "2099-01-01"}]}]}, HOJE)
+        vs = coletor.viradas(
+            {
+                "listaNcm": [
+                    {
+                        "codigoNcm": "1",
+                        "listaAtributos": [
+                            {
+                                "codigo": "X",
+                                "obrigatorio": False,
+                                "dataFimVigencia": "2099-01-01",
+                            }
+                        ],
+                    }
+                ]
+            },
+            HOJE,
+        )
         self.assertEqual([v["atributo"] for v in vs], ["X"])
         self.assertIsNone(vs[0]["nome"])
 
@@ -128,15 +142,13 @@ class TestRegistrosCapengas(unittest.TestCase):
     def test_ncms_afetadas_ordenadas(self):
         dados = amostra()
         fichas = coletor.ncms_afetadas(dados, coletor.viradas(dados, HOJE))
-        self.assertEqual([f["ncm"] for f in fichas],
-                         sorted(f["ncm"] for f in fichas))
+        self.assertEqual([f["ncm"] for f in fichas], sorted(f["ncm"] for f in fichas))
 
 
 class TestSlug(unittest.TestCase):
     def test_dobra_acento(self):
         # Antes o regex comia o "o" e o "a" inteiros: sem-rg-o-declarado.
-        self.assertEqual(coletor.slug("Sem órgão declarado"),
-                         "sem-orgao-declarado")
+        self.assertEqual(coletor.slug("Sem órgão declarado"), "sem-orgao-declarado")
 
     def test_pontuacao(self):
         self.assertEqual(coletor.slug("MIN.DEFESA"), "min-defesa")
@@ -145,18 +157,23 @@ class TestSlug(unittest.TestCase):
         self.assertEqual(coletor.slug("***"), "sem-nome")
 
     def test_colisao_recebe_sufixo(self):
-        grupos = coletor.orgaos([
-            {"codigo": "A", "orgaos": ["MIN.DEFESA"], "total_ncms": 1},
-            {"codigo": "B", "orgaos": ["MIN DEFESA"], "total_ncms": 1},
-        ])
+        grupos = coletor.orgaos(
+            [
+                {"codigo": "A", "orgaos": ["MIN.DEFESA"], "total_ncms": 1},
+                {"codigo": "B", "orgaos": ["MIN DEFESA"], "total_ncms": 1},
+            ]
+        )
         slugs = [g["slug"] for g in grupos]
         self.assertEqual(len(slugs), len(set(slugs)))
 
 
 class TestDetalhePublico(unittest.TestCase):
     def test_trunca_dominio_e_reporta_o_total(self):
-        grande = {"codigo": "X", "nome": "X", "dominio": [
-            {"codigo": str(i), "descricao": f"opcao {i}"} for i in range(200)]}
+        grande = {
+            "codigo": "X",
+            "nome": "X",
+            "dominio": [{"codigo": str(i), "descricao": f"opcao {i}"} for i in range(200)],
+        }
         d = coletor.detalhe_publico(grande)
         self.assertEqual(len(d["dominio"]), coletor.MAX_DOMINIO)
         self.assertEqual(d["dominio_total"], 200)
@@ -208,8 +225,10 @@ class TestFiltroDePagina(unittest.TestCase):
 
     def test_assinatura_ignora_o_numero_da_ncm(self):
         dic = coletor.dicionario_atributos(self.dados)
-        self.assertEqual(coletor.assinatura_prosa(dic["ATT_CLONE_A"]),
-                         coletor.assinatura_prosa(dic["ATT_CLONE_B"]))
+        self.assertEqual(
+            coletor.assinatura_prosa(dic["ATT_CLONE_A"]),
+            coletor.assinatura_prosa(dic["ATT_CLONE_B"]),
+        )
 
 
 class TestMapaCompleto(unittest.TestCase):
@@ -282,8 +301,9 @@ class TestDatasInvalidas(unittest.TestCase):
         self.assertIn("ATT_HOJE", codigos)
         c = coletor.contagens(dados, HOJE)
         self.assertEqual(c["datas_invalidas"], 1)
-        self.assertEqual(coletor.datas_invalidas(dados),
-                         [("8415.10.90", "ATT_FUTURO", "2026-02-30")])
+        self.assertEqual(
+            coletor.datas_invalidas(dados), [("8415.10.90", "ATT_FUTURO", "2026-02-30")]
+        )
         nomes = {n: ok for n, ok in coletor.invariantes(c)}
         self.assertFalse(nomes["nenhuma dataFimVigencia invalida"])
 
@@ -354,9 +374,14 @@ class TestValidarForma(unittest.TestCase):
 
 
 class TestPortaoDeSanidade(unittest.TestCase):
-    BOA = {"versao": "346", "ncms": 10571, "vinculos": 73248,
-           "atributos_distintos": 1311, "detalhes_atributos": 1311,
-           "obrigatorios": 15080}
+    BOA = {
+        "versao": "346",
+        "ncms": 10571,
+        "vinculos": 73248,
+        "atributos_distintos": 1311,
+        "detalhes_atributos": 1311,
+        "obrigatorios": 15080,
+    }
 
     def test_aceita_colheita_boa(self):
         self.assertEqual(coletor.conferir_sanidade(self.BOA), [])
@@ -365,8 +390,14 @@ class TestPortaoDeSanidade(unittest.TestCase):
         # O caso que apagava o site inteiro com exit 0.
         with self.assertRaises(RuntimeError):
             coletor.conferir_sanidade(
-                {"versao": "1", "ncms": 0, "vinculos": 0,
-                 "atributos_distintos": 0, "detalhes_atributos": 0})
+                {
+                    "versao": "1",
+                    "ncms": 0,
+                    "vinculos": 0,
+                    "atributos_distintos": 0,
+                    "detalhes_atributos": 0,
+                }
+            )
 
     def test_rejeita_versao_ausente(self):
         ruim = dict(self.BOA, versao=None)
@@ -420,11 +451,11 @@ class TestPortaoDeSanidade(unittest.TestCase):
         self.assertIn("ncms caiu", avisos[0])
         # Piso absoluto e versão continuam fatais mesmo com a válvula.
         with self.assertRaises(RuntimeError):
-            coletor.conferir_sanidade(dict(self.BOA, ncms=10), self.BOA,
-                                      aceitar_queda=True)
+            coletor.conferir_sanidade(dict(self.BOA, ncms=10), self.BOA, aceitar_queda=True)
         with self.assertRaises(RuntimeError):
-            coletor.conferir_sanidade(dict(self.BOA, versao=""), self.BOA,
-                                      aceitar_queda=True)
+            coletor.conferir_sanidade(
+                dict(self.BOA, versao=""), self.BOA, aceitar_queda=True
+            )
 
     def test_valvula_le_o_ambiente(self):
         with mock.patch.dict(os.environ, {"SENTINELA_ACEITAR_QUEDA": "1"}):
@@ -458,8 +489,9 @@ class TestSnapshotAnterior(unittest.TestCase):
     def test_inexistente_e_silencioso(self):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
-                self.assertIsNone(coletor.contagens_anteriores(
-                    os.path.join(tmp, "nada.json")))
+                self.assertIsNone(
+                    coletor.contagens_anteriores(os.path.join(tmp, "nada.json"))
+                )
             self.assertEqual(err.getvalue(), "")
 
 
@@ -472,18 +504,21 @@ class TestAvisosDeContexto(unittest.TestCase):
         self.assertFalse(coletor.versao_regrediu("346", None))
 
     def test_data_do_arquivo(self):
-        self.assertEqual(coletor.data_do_arquivo("ATRIBUTOS_POR_NCM_2026_08_22.json"),
-                         "2026-08-22")
+        self.assertEqual(
+            coletor.data_do_arquivo("ATRIBUTOS_POR_NCM_2026_08_22.json"), "2026-08-22"
+        )
         self.assertIsNone(coletor.data_do_arquivo("ATRIBUTOS.json"))
         self.assertIsNone(coletor.data_do_arquivo(None))
 
     def test_fuso_sem_tzdata_usa_utc_menos_3(self):
-        with mock.patch.object(coletor, "ZoneInfo",
-                               side_effect=ZoneInfoNotFoundError("sem tzdata")), \
-                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+        with (
+            mock.patch.object(
+                coletor, "ZoneInfo", side_effect=ZoneInfoNotFoundError("sem tzdata")
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
             fuso = coletor._fuso()
-        self.assertEqual(fuso.utcoffset(datetime(2026, 8, 22, 12)),
-                         timedelta(hours=-3))
+        self.assertEqual(fuso.utcoffset(datetime(2026, 8, 22, 12)), timedelta(hours=-3))
         self.assertIn("tzdata", err.getvalue())
 
     def test_fuso_com_tzdata_e_sao_paulo(self):
@@ -497,8 +532,9 @@ class TestAvisosDeContexto(unittest.TestCase):
         self.assertIn(coletor.__version__, coletor.AGENTE)
 
 
-def _zip_de(conteudo, nome="ATRIBUTOS_POR_NCM_2026_08_22.json",
-            mtime=(2026, 8, 22, 0, 0, 0)):
+def _zip_de(
+    conteudo, nome="ATRIBUTOS_POR_NCM_2026_08_22.json", mtime=(2026, 8, 22, 0, 0, 0)
+):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         info = zipfile.ZipInfo(nome, date_time=mtime)
@@ -510,8 +546,10 @@ class RespostaFalsa(io.BytesIO):
     def __init__(self, corpo, tipo="application/zip"):
         super().__init__(corpo)
         self.status = 200
-        self.headers = {"Content-Type": tipo,
-                        "Content-Disposition": "attachment; filename=x.zip"}
+        self.headers = {
+            "Content-Type": tipo,
+            "Content-Disposition": "attachment; filename=x.zip",
+        }
 
     def __enter__(self):
         return self
@@ -558,8 +596,9 @@ class TestBaixar(unittest.TestCase):
         a = _zip_de(corpo, mtime=(2026, 8, 22, 1, 0, 0))
         b = _zip_de(corpo, mtime=(2026, 8, 22, 2, 0, 0))
         self.assertNotEqual(a, b)
-        with mock.patch("urllib.request.urlopen",
-                        side_effect=[RespostaFalsa(a), RespostaFalsa(b)]):
+        with mock.patch(
+            "urllib.request.urlopen", side_effect=[RespostaFalsa(a), RespostaFalsa(b)]
+        ):
             m1 = coletor.baixar().meta
             m2 = coletor.baixar().meta
         self.assertEqual(m1["sha256_json"], m2["sha256_json"])
@@ -568,23 +607,26 @@ class TestBaixar(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", return_value=RespostaFalsa(self.corpo)):
             baixado = coletor.baixar()
         self.assertEqual(baixado.bruto, self.corpo)
-        self.assertEqual(baixado.meta["arquivo_interno"],
-                         "ATRIBUTOS_POR_NCM_2026_08_22.json")
+        self.assertEqual(
+            baixado.meta["arquivo_interno"], "ATRIBUTOS_POR_NCM_2026_08_22.json"
+        )
 
     def test_zip_com_mais_de_um_arquivo(self):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as z:
             z.writestr("a.json", "{}")
             z.writestr("b.json", "{}")
-        with mock.patch("urllib.request.urlopen",
-                        return_value=RespostaFalsa(buf.getvalue())):
+        with mock.patch(
+            "urllib.request.urlopen", return_value=RespostaFalsa(buf.getvalue())
+        ):
             with self.assertRaises(RuntimeError):
                 coletor.baixar(tentativas=1)
 
     def test_pagina_de_manutencao_servida_com_200(self):
-        with mock.patch("urllib.request.urlopen",
-                        return_value=RespostaFalsa(b"<html>em manutencao</html>",
-                                                   tipo="text/html")):
+        with mock.patch(
+            "urllib.request.urlopen",
+            return_value=RespostaFalsa(b"<html>em manutencao</html>", tipo="text/html"),
+        ):
             with self.assertRaises(RuntimeError) as ctx:
                 coletor.baixar(tentativas=1)
         # A mensagem traz um pedaço do corpo: é o que diz O QUE veio.
@@ -592,8 +634,9 @@ class TestBaixar(unittest.TestCase):
 
     def test_amostra_do_corpo_cabe_numa_linha(self):
         corpo = b"<html>\n" + b"x" * 500 + b"\n</html>"
-        with mock.patch("urllib.request.urlopen",
-                        return_value=RespostaFalsa(corpo, tipo="text/html")):
+        with mock.patch(
+            "urllib.request.urlopen", return_value=RespostaFalsa(corpo, tipo="text/html")
+        ):
             with self.assertRaises(RuntimeError) as ctx:
                 coletor.baixar(tentativas=1)
         self.assertNotIn("\n", str(ctx.exception))
@@ -624,7 +667,8 @@ class TestBaixar(unittest.TestCase):
 
     def test_repete_em_falha_transitoria(self):
         falsa, fila = _urlopen_em_sequencia(
-            [urllib.error.URLError("timeout"), RespostaFalsa(self.corpo)])
+            [urllib.error.URLError("timeout"), RespostaFalsa(self.corpo)]
+        )
         with mock.patch("urllib.request.urlopen", side_effect=falsa):
             baixado = coletor.baixar()
         self.assertTrue(baixado.conteudo)
@@ -646,7 +690,8 @@ class TestBaixar(unittest.TestCase):
     def test_incomplete_read_e_retentado(self):
         # IncompleteRead não é URLError: escapava do retry e custava o dia.
         falsa, fila = _urlopen_em_sequencia(
-            [RespostaQueCaiNoMeio(self.corpo), RespostaFalsa(self.corpo)])
+            [RespostaQueCaiNoMeio(self.corpo), RespostaFalsa(self.corpo)]
+        )
         with mock.patch("urllib.request.urlopen", side_effect=falsa):
             baixado = coletor.baixar()
         self.assertEqual(baixado.bruto, self.corpo)
@@ -655,7 +700,8 @@ class TestBaixar(unittest.TestCase):
 
     def test_connection_reset_e_retentado(self):
         falsa, fila = _urlopen_em_sequencia(
-            [ConnectionResetError("reset"), RespostaFalsa(self.corpo)])
+            [ConnectionResetError("reset"), RespostaFalsa(self.corpo)]
+        )
         with mock.patch("urllib.request.urlopen", side_effect=falsa):
             coletor.baixar()
         self.assertEqual(fila, [])
@@ -670,12 +716,14 @@ class TestBaixar(unittest.TestCase):
         self.assertEqual(self.sleep_mock.call_count, 4)
 
     def test_408_e_429_sao_retentados_e_honram_retry_after(self):
-        falsa, fila = _urlopen_em_sequencia([
-            _erro_http(429, {"Retry-After": "7"}),
-            _erro_http(408),
-            _erro_http(429, {"Retry-After": "100000"}),
-            RespostaFalsa(self.corpo),
-        ])
+        falsa, fila = _urlopen_em_sequencia(
+            [
+                _erro_http(429, {"Retry-After": "7"}),
+                _erro_http(408),
+                _erro_http(429, {"Retry-After": "100000"}),
+                RespostaFalsa(self.corpo),
+            ]
+        )
         with mock.patch("urllib.request.urlopen", side_effect=falsa):
             coletor.baixar()
         self.assertEqual(fila, [])
@@ -694,7 +742,8 @@ class TestBaixar(unittest.TestCase):
 
     def test_backoff_e_10_30_90_180(self):
         falsa, fila = _urlopen_em_sequencia(
-            [urllib.error.URLError("x")] * 4 + [RespostaFalsa(self.corpo)])
+            [urllib.error.URLError("x")] * 4 + [RespostaFalsa(self.corpo)]
+        )
         with mock.patch("urllib.request.urlopen", side_effect=falsa):
             coletor.baixar()
         esperas = [c.args[0] for c in self.sleep_mock.call_args_list]
@@ -702,7 +751,8 @@ class TestBaixar(unittest.TestCase):
 
     def test_zip_corrompido_e_retentado(self):
         falsa, fila = _urlopen_em_sequencia(
-            [RespostaFalsa(b"PK\x03\x04" + b"lixo" * 10), RespostaFalsa(self.corpo)])
+            [RespostaFalsa(b"PK\x03\x04" + b"lixo" * 10), RespostaFalsa(self.corpo)]
+        )
         with mock.patch("urllib.request.urlopen", side_effect=falsa):
             coletor.baixar()
         self.assertEqual(fila, [])
@@ -711,32 +761,38 @@ class TestBaixar(unittest.TestCase):
     def test_pagina_de_manutencao_e_retentada(self):
         # A manutenção é transitória por definição.
         falsa, fila = _urlopen_em_sequencia(
-            [RespostaFalsa(b"<html>em manutencao</html>", tipo="text/html"),
-             RespostaFalsa(self.corpo)])
+            [
+                RespostaFalsa(b"<html>em manutencao</html>", tipo="text/html"),
+                RespostaFalsa(self.corpo),
+            ]
+        )
         with mock.patch("urllib.request.urlopen", side_effect=falsa):
             coletor.baixar()
         self.assertEqual(fila, [])
 
     def test_aceita_zip_por_bytes_magicos_com_content_type_errado(self):
-        with mock.patch("urllib.request.urlopen",
-                        return_value=RespostaFalsa(self.corpo,
-                                                   tipo="application/octet-stream")):
+        with mock.patch(
+            "urllib.request.urlopen",
+            return_value=RespostaFalsa(self.corpo, tipo="application/octet-stream"),
+        ):
             baixado = coletor.baixar(tentativas=1)
         self.assertEqual(baixado.meta["content_type"], "application/octet-stream")
         self.assertTrue(baixado.conteudo)
 
     def test_recusa_zip_acima_do_teto(self):
-        with mock.patch.object(coletor, "MAX_ZIP", 100), \
-                mock.patch("urllib.request.urlopen",
-                           return_value=RespostaFalsa(self.corpo)):
+        with (
+            mock.patch.object(coletor, "MAX_ZIP", 100),
+            mock.patch("urllib.request.urlopen", return_value=RespostaFalsa(self.corpo)),
+        ):
             with self.assertRaisesRegex(RuntimeError, "teto"):
                 coletor.baixar(tentativas=1)
 
     def test_recusa_json_acima_do_teto_antes_de_descompactar(self):
-        with mock.patch.object(coletor, "MAX_JSON", 10), \
-                mock.patch("urllib.request.urlopen",
-                           return_value=RespostaFalsa(self.corpo)), \
-                mock.patch.object(zipfile.ZipFile, "read") as leitura:
+        with (
+            mock.patch.object(coletor, "MAX_JSON", 10),
+            mock.patch("urllib.request.urlopen", return_value=RespostaFalsa(self.corpo)),
+            mock.patch.object(zipfile.ZipFile, "read") as leitura,
+        ):
             with self.assertRaisesRegex(RuntimeError, "teto"):
                 coletor.baixar(tentativas=1)
         leitura.assert_not_called()
@@ -744,8 +800,10 @@ class TestBaixar(unittest.TestCase):
 
 class TestMain(unittest.TestCase):
     def _main_com(self, erro):
-        with mock.patch.object(coletor, "coletar", side_effect=erro), \
-                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+        with (
+            mock.patch.object(coletor, "coletar", side_effect=erro),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
             codigo = coletor.main()
         return codigo, err.getvalue()
 
@@ -790,8 +848,9 @@ def _arquivos_em(raiz):
     achados = []
     for pasta, _, nomes in os.walk(raiz):
         for nome in nomes:
-            achados.append(os.path.relpath(os.path.join(pasta, nome), raiz)
-                           .replace(os.sep, "/"))
+            achados.append(
+                os.path.relpath(os.path.join(pasta, nome), raiz).replace(os.sep, "/")
+            )
     return sorted(achados)
 
 
@@ -805,17 +864,22 @@ class TestColetarFimAFim(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dir = os.path.join(tmp.name, "dados")
-        for p in (mock.patch.object(coletor, "PISO", self.PISO_BAIXO),
-                  mock.patch("time.sleep"),
-                  mock.patch.dict(os.environ, {"SENTINELA_ACEITAR_QUEDA": ""})):
+        for p in (
+            mock.patch.object(coletor, "PISO", self.PISO_BAIXO),
+            mock.patch("time.sleep"),
+            mock.patch.dict(os.environ, {"SENTINELA_ACEITAR_QUEDA": ""}),
+        ):
             p.start()
             self.addCleanup(p.stop)
 
     def _coletar(self, dados, referencia=HOJE):
         corpo = _zip_de(json.dumps(dados).encode("utf-8"))
-        with mock.patch("urllib.request.urlopen",
-                        side_effect=lambda *a, **k: RespostaFalsa(corpo)), \
-                mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+        with (
+            mock.patch(
+                "urllib.request.urlopen", side_effect=lambda *a, **k: RespostaFalsa(corpo)
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
             snapshot = coletor.coletar(referencia=referencia, dir_dados=self.dir)
         return snapshot, err.getvalue()
 
@@ -834,9 +898,16 @@ class TestColetarFimAFim(unittest.TestCase):
 
     def test_colheita_boa_grava_os_arquivos_sem_tmp(self):
         snapshot, err = self._coletar(amostra())
-        self.assertEqual(_arquivos_em(self.dir), [
-            "atributos.json", "bruto.zip", "completo.json",
-            "historico/2026-08-22.json", "ultimo.json"])
+        self.assertEqual(
+            _arquivos_em(self.dir),
+            [
+                "atributos.json",
+                "bruto.zip",
+                "completo.json",
+                "historico/2026-08-22.json",
+                "ultimo.json",
+            ],
+        )
         self.assertTrue(snapshot["gravado"])
         self.assertTrue(snapshot["catalogo_reescrito"])
         self.assertTrue(snapshot["bruto_novo"])
@@ -866,12 +937,20 @@ class TestColetarFimAFim(unittest.TestCase):
         self.assertFalse(segundo["catalogo_reescrito"])
         # Mesmo JSON e mesmas viradas: o catálogo é recalculado (é função
         # também da regra em merece_pagina), mas nada é reescrito.
-        self.assertEqual(os.path.getmtime(os.path.join(self.dir, "atributos.json")),
-                         mtime_catalogo)
+        self.assertEqual(
+            os.path.getmtime(os.path.join(self.dir, "atributos.json")), mtime_catalogo
+        )
         self.assertGreater(segundo["atributos_publicaveis"], 0)
-        self.assertEqual(_arquivos_em(self.dir), [
-            "atributos.json", "bruto.zip", "completo.json",
-            "historico/2026-08-22.json", "ultimo.json"])
+        self.assertEqual(
+            _arquivos_em(self.dir),
+            [
+                "atributos.json",
+                "bruto.zip",
+                "completo.json",
+                "historico/2026-08-22.json",
+                "ultimo.json",
+            ],
+        )
 
     def test_mesmo_json_em_outro_dia_grava_snapshot_novo(self):
         # Mesmo JSON, outro dia: ATT_HOJE (2026-08-22) já passou. O catálogo
@@ -923,8 +1002,7 @@ class TestColetarFimAFim(unittest.TestCase):
     def _amostra_encolhida(self):
         dados = amostra()
         fora = {"8436.21.00", "8504.21.00", "8544.42.00"}
-        dados["listaNcm"] = [n for n in dados["listaNcm"]
-                             if n.get("codigoNcm") not in fora]
+        dados["listaNcm"] = [n for n in dados["listaNcm"] if n.get("codigoNcm") not in fora]
         return dados
 
     def test_queda_rolante_e_fatal_por_padrao(self):
@@ -949,8 +1027,9 @@ class TestColetarFimAFim(unittest.TestCase):
     def test_valvula_nao_salva_piso_absoluto(self):
         with mock.patch.dict(os.environ, {"SENTINELA_ACEITAR_QUEDA": "1"}):
             with self.assertRaisesRegex(RuntimeError, "abaixo do piso"):
-                self._coletar({"versao": "1", "listaNcm": [],
-                               "detalhesAtributos": [{"codigo": "X"}]})
+                self._coletar(
+                    {"versao": "1", "listaNcm": [], "detalhesAtributos": [{"codigo": "X"}]}
+                )
         self.assertEqual(_arquivos_em(self.dir), [])
 
     def test_data_invalida_isolada_entra_no_snapshot(self):
@@ -959,8 +1038,10 @@ class TestColetarFimAFim(unittest.TestCase):
         with mock.patch.object(coletor, "LIMITE_DATAS_INVALIDAS", 0.5):
             snapshot, _ = self._coletar(_com_data_invalida())
         self.assertEqual(snapshot["contagens"]["datas_invalidas"], 1)
-        self.assertEqual(snapshot["datas_invalidas_amostra"],
-                         [["8415.10.90", "ATT_FUTURO", "2026-02-30"]])
+        self.assertEqual(
+            snapshot["datas_invalidas_amostra"],
+            [["8415.10.90", "ATT_FUTURO", "2026-02-30"]],
+        )
         self.assertIn("nenhuma dataFimVigencia invalida", snapshot["invariantes_falhas"])
 
     def test_arquivo_de_outro_dia_vira_aviso(self):
@@ -983,20 +1064,26 @@ class TestColetarFimAFim(unittest.TestCase):
     def test_main_imprime_warnings_do_actions(self):
         with mock.patch.object(coletor, "LIMITE_DATAS_INVALIDAS", 0.5):
             snapshot, _ = self._coletar(_com_data_invalida())
-        with mock.patch.object(coletor, "coletar", return_value=snapshot), \
-                mock.patch("sys.stderr", new_callable=io.StringIO) as err, \
-                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+        with (
+            mock.patch.object(coletor, "coletar", return_value=snapshot),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+            mock.patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
             self.assertEqual(coletor.main(), 0)
-        self.assertIn("::warning::invariante violada: nenhum registro descartado",
-                      err.getvalue())
-        self.assertIn("::warning::dataFimVigencia inválida na NCM 8415.10.90",
-                      err.getvalue())
+        self.assertIn(
+            "::warning::invariante violada: nenhum registro descartado", err.getvalue()
+        )
+        self.assertIn(
+            "::warning::dataFimVigencia inválida na NCM 8415.10.90", err.getvalue()
+        )
         self.assertIn("viradas agendadas", out.getvalue())
 
     def _stderr_do_main(self, snapshot):
-        with mock.patch.object(coletor, "coletar", return_value=snapshot), \
-                mock.patch("sys.stderr", new_callable=io.StringIO) as err, \
-                mock.patch("sys.stdout", new_callable=io.StringIO):
+        with (
+            mock.patch.object(coletor, "coletar", return_value=snapshot),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+        ):
             coletor.main()
         return err.getvalue()
 
