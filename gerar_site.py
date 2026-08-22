@@ -29,6 +29,7 @@ DIR_HISTORICO = os.path.join(RAIZ, "dados", "historico")
 ARQ_ULTIMO = os.path.join(RAIZ, "dados", "ultimo.json")
 ARQ_CONFIG = os.path.join(RAIZ, "config.json")
 ARQ_ATRIBUTOS = os.path.join(RAIZ, "dados", "atributos.json")
+DIR_FONTES = os.path.join(RAIZ, "fontes")
 
 MESES = ("", "janeiro", "fevereiro", "março", "abril", "maio", "junho",
          "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")
@@ -195,15 +196,18 @@ def tabela_viradas(viradas, referencia):
     for v in viradas:
         dias = dias_ate(v["vira_obrigatorio_em"], referencia)
         prazo = "hoje" if dias == 0 else ("amanhã" if dias == 1 else f"em {dias} dias")
+        # A barra da a leitura visual do prazo: 30 dias enche, hoje quase vazia.
+        largura = min(100, max(6, round(dias / 30 * 100)))
         linhas.append(
             f'<tr>'
             f'<td class="ncm"><a href="/ncm/{v["ncm"]}/">{esc(v["ncm"])}</a></td>'
             f'<td><a href="/atributos/{v["atributo"]}/">{esc(v["nome"] or v["atributo"])}</a>'
-            f'<br><span style="font-family:var(--mono);font-size:.8rem;color:var(--faint)">'
-            f'{esc(v["atributo"])}</span></td>'
+            f'<br><span class="cod-inline">{esc(v["atributo"])}</span></td>'
             f'<td>{esc("/".join(v["orgaos"]) or "—")}</td>'
             f'<td class="data">{br(v["vira_obrigatorio_em"])}'
-            f'<br><span style="font-size:.8rem;color:var(--faint)">{prazo}</span></td>'
+            f'<br><span class="prazo-txt">{prazo}</span>'
+            f'<span class="prazo"><i style="width:{largura}%"></i></span>'
+            f'</td>'
             f'</tr>')
     return ('<div class="rolagem"><table>'
             '<thead><tr><th>NCM</th><th>Atributo</th><th>Órgão</th>'
@@ -294,6 +298,21 @@ def gerar_index(cfg, s):
         dias = dias_ate(proxima, ref)
         ncms = len({v["ncm"] for v in vs})
         orgaos = sorted({o for v in vs for o in v["orgaos"]})
+        datas = sorted({v["vira_obrigatorio_em"] for v in vs})
+        no_corte = sum(1 for v in vs if v["vira_obrigatorio_em"] == proxima)
+        seguinte = br(datas[1]) if len(datas) > 1 else "—"
+        cartao = (
+            '<div class="contagem-cartao">'
+            '<div class="contagem-topo">'
+            f'<span class="contagem-num" data-contagem="{dias}">{dias}</span>'
+            f'<span class="contagem-un">{plural(dias, 'dia', 'dias')}</span>'
+            '</div>'
+            '<div class="contagem-fatos">'
+            f'<div><span>corte</span>{br(proxima)}</div>'
+            f'<div><span>órgão</span>{esc('/'.join(orgaos))}</div>'
+            f'<div><span>vínculos</span>{no_corte} de {len(vs)}</div>'
+            f'<div><span>próximo</span>{seguinte}</div>'
+            '</div></div>')
         h1 = (f"{len(vs)} {plural(len(vs), 'atributo', 'atributos')} de NCM "
               f"{plural(len(vs), 'vira', 'viram')} "
               f"{plural(len(vs), 'obrigatório', 'obrigatórios')} "
@@ -304,10 +323,6 @@ def gerar_index(cfg, s):
                 f"Os produtos {plural(ncms, 'dessa NCM', 'dessas NCMs')} que estiverem "
                 f"sem {plural(len(vs), 'o atributo preenchido', 'os atributos preenchidos')} "
                 f"na data são desativados no Catálogo de Produtos do Portal Único.")
-        aviso = (f'<div class="aviso"><strong>Próximo corte: {por_extenso(proxima)}</strong>'
-                 f'{" — é hoje." if dias == 0 else (" — falta 1 dia." if dias == 1 else f" — faltam {dias} dias.")} '
-                 f'Exigência {"do " + orgaos[0] if len(orgaos) == 1 else "dos órgãos anuentes"}.'
-                 f'</div>')
         descricao = (f"{len(vs)} {plural(len(vs), 'atributo', 'atributos')} em "
                      f"{ncms} {plural(ncms, 'NCM', 'NCMs')} {plural(len(vs), 'vira', 'viram')} "
                      f"{plural(len(vs), 'obrigatório', 'obrigatórios')} no Catálogo de "
@@ -317,7 +332,12 @@ def gerar_index(cfg, s):
         lede = ("O arquivo oficial de hoje não traz nenhum vínculo com data para virar "
                 "obrigatório. Esta página é atualizada todo dia — quando a Receita "
                 "agendar uma nova virada, ela aparece aqui.")
-        aviso = ""
+        cartao = (
+            '<div class="contagem-cartao">'
+            '<div class="contagem-fatos" style="margin:0;padding:0;border:0">'
+            '<div><span>vínculos com data</span>0</div>'
+            '<div><span>releitura</span>amanhã 09:00 UTC</div>'
+            '</div></div>')
         descricao = ("Monitoramento diário dos atributos de NCM que viram obrigatórios "
                      "no Catálogo de Produtos do Portal Único.")
 
@@ -325,7 +345,7 @@ def gerar_index(cfg, s):
         "data_ref": br(s["data_referencia"]),
         "h1": esc(h1),
         "lede": esc(lede),
-        "aviso": aviso,
+        "cartao": cartao,
         "tabela": tabela_viradas(vs, ref),
         "historico": bloco_historico({f["ncm"] for f in s.get("ncms_afetadas", [])}),
     })
@@ -600,6 +620,33 @@ def gerar_orgaos(cfg, s, catalogo):
     return caminhos
 
 
+def gerar_fontes(cfg):
+    """Copia as fontes auto-hospedadas para site/.
+
+    Auto-hospedadas de proposito: a pagina de privacidade afirma que o site
+    nao faz requisicao a terceiro, e carregar do Google Fonts contradiria
+    isso. Sao variaveis - um arquivo por subset serve todos os pesos.
+    """
+    if not os.path.isdir(DIR_FONTES):
+        return
+    destino = os.path.join(DIR_SITE, "fontes")
+    os.makedirs(destino, exist_ok=True)
+    prefixo = cfg.get("base_path", "").rstrip("/")
+    for nome in os.listdir(DIR_FONTES):
+        origem = os.path.join(DIR_FONTES, nome)
+        if nome.endswith(".css"):
+            with open(origem, encoding="utf-8") as f:
+                css = f.read()
+            # O prefixo de base_path nao alcanca arquivo externo ao HTML.
+            if prefixo:
+                css = css.replace("url(/fontes/", f"url({prefixo}/fontes/")
+            with open(os.path.join(destino, nome), "w",
+                      encoding="utf-8", newline=chr(10)) as f:
+                f.write(css)
+        else:
+            shutil.copy2(origem, os.path.join(destino, nome))
+
+
 def gerar_cname(cfg):
     """O Pages exige CNAME na raiz publicada, e o site/ e apagado a cada build."""
     dominio = cfg.get("dominio")
@@ -711,6 +758,7 @@ def main():
     caminhos += gerar_orgaos(cfg, s, catalogo)
     caminhos += gerar_privacidade(cfg, s)
     gerar_feed(cfg, s)
+    gerar_fontes(cfg)
     gerar_cname(cfg)
     gerar_indexnow(cfg)
     gerar_sitemap(cfg, caminhos, s)
