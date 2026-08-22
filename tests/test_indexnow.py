@@ -232,27 +232,50 @@ class TestPost(Ambiente):
         self.assertTrue(indexnow.AGENTE.startswith("SentinelaDoCatalogo/"))
         self.assertEqual(indexnow.AGENTE, coletor.AGENTE)
 
-    def test_poda_acima_do_maximo_manda_so_a_primeira(self):
-        self.config()
-        lista = [
-            f"https://exemplo.test/repo/ncm/{i:08d}/" for i in range(indexnow.MAXIMO + 1)
+    def _lista(self, n):
+        return [f"https://exemplo.test/repo/ncm/{i:08d}/" for i in range(n)]
+
+    def _lotes_enviados(self, urlopen):
+        return [
+            json.loads(chamada.args[0].data.decode("utf-8"))["urlList"]
+            for chamada in urlopen.call_args_list
         ]
+
+    def test_acima_do_lote_manda_em_lotes_sequenciais(self):
+        # Uma virada em massa muda 10 mil páginas de verdade: vai tudo, um
+        # POST por lote do tamanho que o protocolo aceita, sem poda.
+        self.config()
+        lista = self._lista(2 * indexnow.LOTE + 1)
         self.mudancas(lista)
         with mock.patch("urllib.request.urlopen", return_value=_resposta()) as u:
             codigo, saida, _ = self.roda()
         self.assertEqual(codigo, 0)
-        self.assertIn("lote demais", saida)
-        corpo = json.loads(self._requisicao(u).data.decode("utf-8"))
-        self.assertEqual(corpo["urlList"], lista[:1])
+        lotes = self._lotes_enviados(u)
+        self.assertEqual([len(lote) for lote in lotes], [indexnow.LOTE, indexnow.LOTE, 1])
+        self.assertEqual(sum(lotes, []), lista)
+        self.assertIn("lote 1/3", saida)
+        self.assertIn("lote 3/3", saida)
 
-    def test_exatamente_o_maximo_vai_inteiro(self):
+    def test_exatamente_o_lote_vai_num_post_so(self):
         self.config()
-        lista = [f"https://exemplo.test/repo/ncm/{i:08d}/" for i in range(indexnow.MAXIMO)]
-        self.mudancas(lista)
+        self.mudancas(self._lista(indexnow.LOTE))
         with mock.patch("urllib.request.urlopen", return_value=_resposta()) as u:
-            self.roda()
-        corpo = json.loads(self._requisicao(u).data.decode("utf-8"))
-        self.assertEqual(len(corpo["urlList"]), indexnow.MAXIMO)
+            _, saida, _ = self.roda()
+        self.assertEqual([len(lote) for lote in self._lotes_enviados(u)], [indexnow.LOTE])
+        self.assertNotIn("lote 1/", saida)
+
+    def test_lote_recusado_interrompe_os_seguintes(self):
+        # O que derrubou o primeiro (chave não encontrada) derrubaria os
+        # outros: parar poupa requisições, e o próximo build reenvia.
+        self.config()
+        self.mudancas(self._lista(indexnow.LOTE + 5))
+        erro = _erro_http(422, b'{"message":"Invalid key"}')
+        with mock.patch("urllib.request.urlopen", side_effect=erro) as u:
+            codigo, _, stderr = self.roda()
+        self.assertEqual(codigo, 1)
+        self.assertEqual(u.call_count, 1)
+        self.assertIn("lote 1/2", stderr)
+        self.assertIn("Invalid key", stderr)
 
     def test_422_devolve_1_sem_levantar_e_loga_corpo(self):
         self.config()

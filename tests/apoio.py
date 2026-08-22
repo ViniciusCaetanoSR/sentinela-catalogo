@@ -43,6 +43,65 @@ def amostra():
         return json.load(f)
 
 
+# O atributo da virada em massa sintética: opcional, com a mesma data em
+# muitas NCMs - o ATT_15540 (cClassTrib) da fixture.
+ATT_LOTE = "ATT_LOTE"
+DATA_LOTE = "2027-01-01"
+
+
+def _detalhe_lote(codigo):
+    return {
+        "codigo": codigo,
+        "nomeApresentacao": "Código de classificação tributária",
+        "nome": "cClassTrib",
+        "definicao": "Classificação tributária do produto na reforma tributária.",
+        "orientacaoPreenchimento": "Informe o código da tabela oficial.",
+        "formaPreenchimento": "TEXTO",
+        "orgaos": ["RFB"],
+        "multivalorado": False,
+        "dominio": [],
+    }
+
+
+def _vinculo_lote(codigo, data):
+    return {
+        "codigo": codigo,
+        "obrigatorio": False,
+        "modalidade": "IMPORTACAO",
+        "dataInicioVigencia": "2026-01-01",
+        "dataFimVigencia": data,
+    }
+
+
+def com_lote(dados, n, codigo=ATT_LOTE, data=DATA_LOTE):
+    """A amostra mais N NCMs sintéticas (9001.xx.yy), cada uma com um único
+    vínculo: o mesmo atributo opcional, com a mesma dataFimVigencia.
+
+    É a fixture do modo lote, montada em memória para não inchar a
+    amostra.json nem mexer nos casos que os outros testes contam. Devolve o
+    próprio `dados`, já alterado.
+    """
+    for i in range(n):
+        dados["listaNcm"].append(
+            {
+                "codigoNcm": f"9001.{i // 100:02d}.{i % 100:02d}",
+                "listaAtributos": [_vinculo_lote(codigo, data)],
+            }
+        )
+    dados["detalhesAtributos"].append(_detalhe_lote(codigo))
+    return dados
+
+
+def com_atributo_em_todas(dados, codigo=ATT_LOTE, data=DATA_LOTE):
+    """O mesmo atributo opcional, com a mesma data, em TODAS as NCMs da
+    amostra - o cenário cClassTrib em miniatura. Devolve `dados`."""
+    for ncm in dados["listaNcm"]:
+        if ncm.get("codigoNcm"):
+            ncm.setdefault("listaAtributos", []).append(_vinculo_lote(codigo, data))
+    dados["detalhesAtributos"].append(_detalhe_lote(codigo))
+    return dados
+
+
 @contextlib.contextmanager
 def ambiente(tmp, cfg=None, com_templates=True):
     """Um repositório de mentira em `tmp`, com os templates e fontes reais.

@@ -140,6 +140,14 @@ details.opcoes dd{margin:0}
 .tag.muda{color:var(--accent-forte);background:var(--alerta-bg)}
 .tag.obr{color:var(--ok);background:var(--ok-bg)}
 .tag.opc{color:var(--faint);border-color:var(--rule-strong)}
+/* prazo vencido e ainda opcional: a data passou e a Receita nao trocou o
+   campo. E a falha da hipotese central do produto, por isso grita. */
+.tag.venc{color:#fff;background:var(--urgente);border-color:var(--urgente)}
+/* modo lote: um mesmo atributo com a mesma data em mais de LIMIAR_LOTE NCMs
+   vira uma linha so na home; a lista das NCMs fica na pagina do atributo. */
+td.lote-ncms strong{font-family:var(--mono);font-size:.84rem;
+  font-variant-numeric:tabular-nums;font-weight:600}
+td.lote-ncms a{font-size:.86rem;text-decoration:underline}
 
 /* ------------------------------------------------------------------ avisos */
 .aviso{border-left:3px solid var(--marca);background:var(--alerta-bg);

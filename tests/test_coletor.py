@@ -114,7 +114,23 @@ class TestViradas(unittest.TestCase):
             HOJE,
         )
         self.assertEqual([v["atributo"] for v in vs], ["X"])
-        self.assertIsNone(vs[0]["nome"])
+        self.assertIsNone(coletor.atributos_das_viradas({}, vs)["X"]["nome"])
+
+    def test_virada_carrega_so_o_que_e_do_vinculo(self):
+        # Nome, órgãos e forma são do atributo e moram no mapa "atributos":
+        # repetidos em cada virada, uma virada em massa multiplicava o mesmo
+        # nome por 10 mil linhas no snapshot.
+        self.assertEqual(
+            set(self.vs[0]),
+            {"ncm", "atributo", "vira_obrigatorio_em", "vigente_desde", "modalidade"},
+        )
+
+    def test_atributos_das_viradas_uma_entrada_por_atributo(self):
+        mapa = coletor.atributos_das_viradas(self.dados, self.vs)
+        self.assertEqual(set(mapa), set(self.codigos))
+        self.assertEqual(mapa["ATT_FUTURO"]["nome"], "Referência de licenciamento")
+        self.assertEqual(mapa["ATT_FUTURO"]["orgaos"], ["INMETRO"])
+        self.assertIn("forma_preenchimento", mapa["ATT_FUTURO"])
 
     def test_listaNcm_ausente(self):
         self.assertEqual(coletor.viradas({}, HOJE), [])
@@ -137,11 +153,6 @@ class TestRegistrosCapengas(unittest.TestCase):
 
     def test_detalhe_sem_codigo_e_descartado(self):
         self.assertNotIn("", coletor.dicionario_atributos(amostra()))
-
-    def test_ncms_afetadas_ordenadas(self):
-        dados = amostra()
-        fichas = coletor.ncms_afetadas(dados, coletor.viradas(dados, HOJE))
-        self.assertEqual([f["ncm"] for f in fichas], sorted(f["ncm"] for f in fichas))
 
 
 class TestSlug(unittest.TestCase):
@@ -213,7 +224,7 @@ class TestFiltroDePagina(unittest.TestCase):
 
     def test_atributo_de_ncm_afetada_entra_sempre(self):
         # Senão a página daquela NCM linkaria para o vazio.
-        afetadas = {f["ncm"] for f in coletor.ncms_afetadas(self.dados, self.vs)}
+        afetadas = {v["ncm"] for v in self.vs}
         for ncm in coletor.lista_ncms(self.dados):
             if ncm["codigoNcm"] in afetadas:
                 for v in coletor.vinculos_de(ncm):
@@ -255,6 +266,21 @@ class TestMapaCompleto(unittest.TestCase):
         largo = self.mapa["atributos"]["ATT_LARGO"]
         self.assertNotIn("d", largo)
 
+    def test_vinculo_carrega_o_fim_de_vigencia_normalizado(self):
+        # É deste mapa, cruzado com as viradas, que o gerador monta a ficha
+        # da NCM - e só com o fim por vínculo a página pode dizer "prazo
+        # vencido" quando a data passou e o vínculo continua opcional.
+        self.assertEqual(self.mapa["schema"], coletor.SCHEMA)
+        por_codigo = {v[0]: v for v in self.mapa["ncms"]["8415.10.90"]}
+        self.assertEqual(
+            por_codigo["ATT_FUTURO"], ["ATT_FUTURO", False, "IMPORTACAO", "2099-12-31"]
+        )
+        self.assertIsNone(por_codigo["ATT_LARGO"][3])
+        # "" em detalhesAtributos e chave omitida em listaAtributos: ambos None.
+        por_codigo = {v[0]: v for v in self.mapa["ncms"]["0101.21.00"]}
+        self.assertIsNone(por_codigo["ATT_VAZIO"][3])
+        self.assertIsNone(por_codigo["ATT_OMITIDO"][3])
+
 
 class TestContagens(unittest.TestCase):
     def test_versao_continua_string(self):
@@ -282,6 +308,22 @@ class TestContagens(unittest.TestCase):
         self.assertEqual(c["obrigatorio_nao_booleano"], 1)
         nomes = {n: ok for n, ok in coletor.invariantes(c)}
         self.assertFalse(nomes["obrigatorio sempre booleano"])
+
+    def test_conta_fim_de_vigencia_passado_ainda_opcional(self):
+        # ATT_PASSADO (2020-01-01, obrigatorio=false): a hipótese de que a
+        # Receita troca o campo na data falhou para ele. ATT_HOJE não conta
+        # (fim == hoje é virada, não vencimento) nem ATT_OBRIGATORIO_FUTURO.
+        c = coletor.contagens(amostra(), HOJE)
+        self.assertEqual(c["fim_vigencia_passado_opcional"], 1)
+        self.assertEqual(
+            coletor.vencidos_opcionais(amostra(), HOJE),
+            [("8436.21.00", "ATT_PASSADO", "2020-01-01")],
+        )
+        nomes = {n: ok for n, ok in coletor.invariantes(c)}
+        self.assertFalse(nomes["nenhum fim de vigência passado ainda opcional"])
+        # Antes da data, nada venceu.
+        c = coletor.contagens(amostra(), date(2019, 12, 31))
+        self.assertEqual(c["fim_vigencia_passado_opcional"], 0)
 
 
 def _com_data_invalida(valor="2026-02-30"):
@@ -1185,6 +1227,80 @@ class TestColetarFimAFim(unittest.TestCase):
         self.assertEqual(snapshot["viradas"], [])
         self.assertEqual(snapshot["contagens"]["com_fim_vigencia_futuro"], 0)
         self.assertNotIn("nenhuma virada agendada", self._stderr_do_main(snapshot))
+
+    def test_main_lista_os_pares_com_prazo_vencido(self):
+        snapshot, _ = self._coletar(amostra())
+        self.assertEqual(
+            snapshot["vencidos_opcionais_amostra"],
+            [["8436.21.00", "ATT_PASSADO", "2020-01-01"]],
+        )
+        self.assertIn(
+            "nenhum fim de vigência passado ainda opcional", snapshot["invariantes_falhas"]
+        )
+        self.assertIn(
+            "::warning::prazo vencido em 2020-01-01 e ainda opcional: NCM 8436.21.00, "
+            "atributo ATT_PASSADO",
+            self._stderr_do_main(snapshot),
+        )
+
+    def test_main_resume_a_lista_de_viradas_em_massa(self):
+        with mock.patch.object(coletor, "MAX_VIRADAS_LISTADAS", 3):
+            snapshot, _ = self._coletar(apoio.com_lote(amostra(), 5))
+            with (
+                mock.patch.object(coletor, "coletar", return_value=snapshot),
+                mock.patch("sys.stderr", new_callable=io.StringIO),
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out,
+            ):
+                coletor.main([])
+        self.assertIn("7 viradas agendadas", out.getvalue())
+        self.assertIn("... e mais 4 viradas", out.getvalue())
+        # O nome e o órgão saem do mapa, não da virada.
+        self.assertIn("INMETRO", out.getvalue())
+
+
+class TestViradaEmMassa(unittest.TestCase):
+    """O snapshot tem de crescer com o número de NCMs, não com o quadrado.
+
+    ATT_15540 (cClassTrib) é opcional nas 10.516 NCMs: uma dataFimVigencia
+    nele são 10.516 viradas num dia. No schema 1 cada uma carregava nome e
+    órgãos, e a ficha inteira de cada NCM ia junto - ~13 MB por dia.
+    """
+
+    def setUp(self):
+        piso = mock.patch.object(coletor, "PISO", apoio.PISO_BAIXO)
+        piso.start()
+        self.addCleanup(piso.stop)
+
+    def _snapshot(self, dados):
+        return coletor.apurar(dados, HOJE, apoio.meta_de(dados, HOJE)).snapshot
+
+    def test_snapshot_cresce_linearmente(self):
+        dados = apoio.com_atributo_em_todas(amostra())
+        snapshot = self._snapshot(dados)
+        ncms = len(coletor.lista_ncms(dados))
+        do_lote = [v for v in snapshot["viradas"] if v["atributo"] == apoio.ATT_LOTE]
+        self.assertEqual(len(do_lote), ncms)
+        self.assertTrue(all(v["vira_obrigatorio_em"] == apoio.DATA_LOTE for v in do_lote))
+        # Uma entrada por atributo, não por virada.
+        self.assertEqual(
+            set(snapshot["atributos"]), {apoio.ATT_LOTE, "ATT_FUTURO", "ATT_HOJE"}
+        )
+        self.assertEqual(snapshot["atributos"][apoio.ATT_LOTE]["orgaos"], ["RFB"])
+        self.assertNotIn("ncms_afetadas", snapshot)
+        self.assertEqual(snapshot["schema"], 2)
+
+    def test_custo_por_ncm_e_constante(self):
+        def tamanho(n):
+            corpo = json.dumps(self._snapshot(apoio.com_lote(amostra(), n)), indent=1)
+            return len(corpo.encode("utf-8"))
+
+        base, com_100, com_200 = tamanho(0), tamanho(100), tamanho(200)
+        por_ncm = (com_200 - com_100) / 100
+        # Só a virada (ncm, atributo, datas, modalidade): nada de nome,
+        # órgãos nem ficha. Se alguém voltar a repetir o nome em cada linha,
+        # o custo por NCM dobra e isto acusa.
+        self.assertLess(por_ncm, 200)
+        self.assertAlmostEqual(com_100 - base, com_200 - com_100, delta=por_ncm * 2)
 
 
 if __name__ == "__main__":

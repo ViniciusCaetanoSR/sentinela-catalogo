@@ -17,7 +17,9 @@ Saida em site/:
     sitemap.xml (índice) + sitemap-*.xml, robots.txt, feed.xml, 404.html
 
 Também grava dados/lastmod.json: o hash do conteúdo de cada página e a data
-em que ele mudou pela última vez, que alimenta o lastmod do sitemap.
+em que ele mudou pela última vez, que alimenta o lastmod do sitemap - e, sob
+"__templates__", o hash dos templates do build, que é o que distingue um
+rebuild (troca de CSS) de uma mudança de dado na hora de avisar o IndexNow.
 
 Uso:
     python gerar_site.py                       dados/ e site/ ao lado do script
@@ -76,15 +78,32 @@ FORMA_PREENCHIMENTO = {
 POR_SITEMAP = 5000
 # NCMs por página de capítulo antes de paginar.
 POR_PAGINA = 400
-# Acima disto o build não mudou conteúdo, foi refeito do zero: não vale
-# pingar o IndexNow com a lista inteira.
-TETO_INDEXNOW = 200
+# Acima deste número de NCMs, um mesmo (atributo, data) deixa de ser N linhas
+# e vira UMA - o "modo lote" (ver agrupar_viradas). Hoje o maior grupo tem 4
+# NCMs e 32 atributos opcionais alcançam mais de 50; o caso que motiva é o
+# ATT_15540 (cClassTrib, reforma tributária), opcional em todas as 10.516
+# NCMs: uma dataFimVigencia nele seriam 10.516 linhas na home, 10.516 itens
+# no feed e uma home de ~4,7 MB.
+LIMIAR_LOTE = 50
+# Quantas NCMs o aviso da página do atributo lista antes de remeter ao
+# índice por capítulo. O mesmo 60 de coletor.atributos_publicaveis(max_ncms).
+MAX_NCMS_AVISO = 60
+# Teto de segurança da tabela da home, em viradas SOLTAS (as que não
+# formaram lote): acima disto ela mostra as primeiras e remete ao índice de
+# atributos. Só dispara se muitos atributos diferentes virarem de uma vez.
+TETO_LINHAS_HOME = 500
+# A chave de lastmod.json que não é página: o hash dos templates e da folha
+# de fontes do último build (ver hash_templates). Tudo o que começa com "__"
+# é metadado, e nunca vira URL.
+CHAVE_TEMPLATES = "__templates__"
 # Janela do bloco "o que mudou": 30 DIAS, não 30 arquivos.
 JANELA_HISTORICO = timedelta(days=30)
 # Maior versão de formato de snapshot (coletor.SCHEMA) que este gerador sabe
 # ler. Arquivo com schema acima disto é ignorado com aviso - um formato que
-# ainda não existe não pode ser interpretado por palpite.
-SCHEMA_SUPORTADO = 1
+# ainda não existe não pode ser interpretado por palpite. O 1 (nome e órgãos
+# repetidos em cada virada, ficha das NCMs afetadas) continua legível, porque
+# o histórico o carrega; ver normalizar_snapshot.
+SCHEMA_SUPORTADO = 2
 
 
 @dataclasses.dataclass
@@ -292,6 +311,46 @@ def virada_estavel(v):
     }
 
 
+def agrupar_viradas(viradas, limiar=LIMIAR_LOTE):
+    """(lotes, soltas): o que vira uma linha só e o que continua individual.
+
+    Um lote é um mesmo (atributo, data) com MAIS de `limiar` NCMs:
+    {atributo, nome, orgaos, data, ncms}. É o que segura a home, o feed e o
+    "o que mudou" quando a Receita agendar uma virada em massa - a página da
+    NCM continua individual, e a lista das NCMs do lote vive na página do
+    atributo. Os lotes saem em ordem de (data, atributo); as soltas mantêm a
+    ordem recebida. As viradas precisam estar completas (normalizar_snapshot).
+    """
+    grupos = {}
+    for v in viradas:
+        grupos.setdefault((v["vira_obrigatorio_em"], v["atributo"]), []).append(v)
+    lotes = []
+    for (data, atributo), grupo in sorted(grupos.items()):
+        if len(grupo) > limiar:
+            lotes.append(
+                {
+                    "atributo": atributo,
+                    "nome": grupo[0].get("nome"),
+                    "orgaos": grupo[0].get("orgaos") or [],
+                    "data": data,
+                    "ncms": sorted({v["ncm"] for v in grupo}),
+                }
+            )
+    em_lote = {(lote["data"], lote["atributo"]) for lote in lotes}
+    soltas = [
+        v for v in viradas if (v["vira_obrigatorio_em"], v["atributo"]) not in em_lote
+    ]
+    return lotes, soltas
+
+
+def frase_lote(lote):
+    """'<nome> vira obrigatório em <data> para N NCMs' - a linha do lote."""
+    return (
+        f"{lote['nome'] or lote['atributo']} vira obrigatório em {br(lote['data'])} "
+        f"para {milhar(len(lote['ncms']))} NCMs"
+    )
+
+
 def bloco_formulario(cfg):
     url_form = cfg.get("form_embed_url")
     if url_form:
@@ -456,32 +515,79 @@ def rotulo(texto):
     return f' data-rot="{esc(texto)}"'
 
 
-def tabela_viradas(build, viradas, referencia):
-    if not viradas:
+def _celulas_virada(build, atributo, nome, orgaos, data, referencia):
+    """As três células que lote e virada solta têm em comum: atributo,
+    órgão e a data com o prazo."""
+    dias = dias_ate(data, referencia)
+    prazo = "hoje" if dias == 0 else ("amanhã" if dias == 1 else f"em {dias} dias")
+    # A barra da a leitura visual do prazo: 30 dias enche, hoje quase vazia.
+    largura = min(100, max(6, round(dias / 30 * 100)))
+    # Urgência acende só abaixo de 7 dias - por isso significa algo.
+    urg = " urgente" if dias <= 7 else ""
+    return (
+        f"<td{rotulo('Atributo')}>"
+        f"{link_atributo(build, atributo, nome or atributo)}"
+        f'<br><span class="cod-inline">{esc(atributo)}</span></td>'
+        f"<td{rotulo('Órgão')}>{esc('/'.join(orgaos) or '—')}</td>"
+        f'<td class="data"{rotulo("Vira obrigatório em")}>'
+        f"{br(data)}"
+        f'<br><span class="prazo-txt{urg}">{prazo}</span>'
+        f'<span class="prazo{urg}"><i style="--w:{largura}%"></i></span>'
+        f"</td>"
+    )
+
+
+def tabela_viradas(build, lotes, soltas, referencia):
+    """A tabela da home: uma linha por lote, depois uma por virada solta.
+
+    O lote não lista as NCMs - seriam 10 mil chips numa célula - e remete à
+    página do atributo. Acima de TETO_LINHAS_HOME viradas soltas a tabela
+    mostra as primeiras e remete ao índice de atributos: é o teto de
+    segurança para o dia em que muitos atributos diferentes virarem juntos.
+    """
+    if not lotes and not soltas:
         # Uma tabela com uma célula solta não é tabela: leitor de tela
         # anunciava "tabela, 1 linha, 1 coluna" para uma frase.
         return '<p class="pendente">Nenhuma virada agendada no arquivo de hoje.</p>'
     linhas = []
-    for v in viradas:
-        dias = dias_ate(v["vira_obrigatorio_em"], referencia)
-        prazo = "hoje" if dias == 0 else ("amanhã" if dias == 1 else f"em {dias} dias")
-        # A barra da a leitura visual do prazo: 30 dias enche, hoje quase vazia.
-        largura = min(100, max(6, round(dias / 30 * 100)))
-        # Urgência acende só abaixo de 7 dias - por isso significa algo.
-        urg = " urgente" if dias <= 7 else ""
+    for lote in lotes:
+        href = esc(url(build.cfg, f"/atributos/{lote['atributo']}/"))
+        linhas.append(
+            f'<tr class="lote">'
+            f'<td class="lote-ncms"{rotulo("NCM")}>'
+            f"<strong>{milhar(len(lote['ncms']))} NCMs</strong><br>"
+            f'<a href="{href}">veja as NCMs na página do atributo</a></td>'
+            + _celulas_virada(
+                build,
+                lote["atributo"],
+                lote["nome"],
+                lote["orgaos"],
+                lote["data"],
+                referencia,
+            )
+            + "</tr>"
+        )
+    for v in soltas[:TETO_LINHAS_HOME]:
         linhas.append(
             f"<tr>"
             f'<td class="ncm"{rotulo("NCM")}>{link_ncm(build, v["ncm"])}</td>'
-            f"<td{rotulo('Atributo')}>"
-            f"{link_atributo(build, v['atributo'], v['nome'] or v['atributo'])}"
-            f'<br><span class="cod-inline">{esc(v["atributo"])}</span></td>'
-            f"<td{rotulo('Órgão')}>{esc('/'.join(v['orgaos']) or '—')}</td>"
-            f'<td class="data"{rotulo("Vira obrigatório em")}>'
-            f"{br(v['vira_obrigatorio_em'])}"
-            f'<br><span class="prazo-txt{urg}">{prazo}</span>'
-            f'<span class="prazo{urg}"><i style="--w:{largura}%"></i></span>'
-            f"</td>"
-            f"</tr>"
+            + _celulas_virada(
+                build,
+                v["atributo"],
+                v["nome"],
+                v["orgaos"],
+                v["vira_obrigatorio_em"],
+                referencia,
+            )
+            + "</tr>"
+        )
+    aviso = ""
+    if len(soltas) > TETO_LINHAS_HOME:
+        aviso = (
+            f'<p class="aviso">A tabela mostra as {milhar(TETO_LINHAS_HOME)} primeiras '
+            f"de {milhar(len(soltas))} viradas. A lista completa, por atributo, está "
+            f'no <a href="{esc(url(build.cfg, "/atributos/"))}">índice de atributos com '
+            f"virada agendada</a>.</p>"
         )
     return (
         '<div class="rolagem" tabindex="0" role="region" '
@@ -490,7 +596,7 @@ def tabela_viradas(build, viradas, referencia):
         '<thead><tr><th scope="col">NCM</th><th scope="col">Atributo</th>'
         '<th scope="col">Órgão</th>'
         '<th scope="col" class="data">Vira obrigatório em</th></tr></thead>'
-        f"<tbody>{''.join(linhas)}</tbody></table></div>"
+        f"<tbody>{''.join(linhas)}</tbody></table></div>{aviso}"
     )
 
 
@@ -537,6 +643,12 @@ def tabela_atributos_ncm(build, atributos, detalhes):
                 f'<span class="tag muda">vira obrigatório em '
                 f"{br(a['vira_obrigatorio_em'])}</span>"
             )
+        elif a.get("prazo_vencido"):
+            # A data passou e o vínculo continua opcional. A hipótese central
+            # do produto - a Receita troca obrigatorio para true na data -
+            # nunca foi verificada; se ela falhar, a página diz a verdade em
+            # vez de "opcional".
+            marca = f'<span class="tag venc">prazo vencido em {br(a["fim"])}</span>'
         elif a.get("obrigatorio"):
             marca = '<span class="tag obr">obrigatório</span>'
         else:
@@ -567,27 +679,69 @@ def tabela_atributos_ncm(build, atributos, detalhes):
     )
 
 
+def schema_de(arquivo):
+    """O schema declarado num snapshot ou num completo.json.
+
+    Os primeiros arquivos não carregavam a chave: são o formato 1.
+    """
+    schema = arquivo.get("schema")
+    return 1 if schema is None else schema
+
+
+def schema_legivel(arquivo):
+    return isinstance(schema_de(arquivo), int) and schema_de(arquivo) <= SCHEMA_SUPORTADO
+
+
+def normalizar_snapshot(snapshot):
+    """O snapshot com as viradas COMPLETAS, seja qual for o schema.
+
+    No schema 1 cada virada carregava nome, orgaos e forma_preenchimento; no
+    2 isso mora no mapa "atributos", uma entrada por código, e a virada só
+    traz o que é do vínculo. O histórico tem os dois formatos lado a lado,
+    então ninguém no gerador lê snapshot["viradas"] cru: lê daqui, e vê
+    sempre as três chaves. "ncms_afetadas" (só no 1) é descartada - a ficha
+    de cada NCM sai de completo.json + viradas. Devolve uma cópia rasa.
+    """
+    mapa = snapshot.get("atributos")
+    if not isinstance(mapa, dict):
+        mapa = {}
+    completas = []
+    for v in snapshot.get("viradas") or []:
+        if not isinstance(v, dict):
+            continue
+        detalhe = mapa.get(v.get("atributo")) or {}
+        completa = dict(v)
+        for chave in ("nome", "orgaos", "forma_preenchimento"):
+            if chave not in completa:
+                completa[chave] = detalhe.get(chave)
+        completa["orgaos"] = completa.get("orgaos") or []
+        completas.append(completa)
+    novo = dict(snapshot)
+    novo["viradas"] = completas
+    novo.pop("ncms_afetadas", None)
+    return novo
+
+
 def _snapshot_historico(caminho):
     """Lê um snapshot antigo sem confiar no formato.
 
     bloco_historico lê até 30 arquivos escritos por até 30 versões do código.
-    O formato já mudou uma vez (atributos_destaque saiu no segundo dia) e
-    sobreviveu por sorte. Arquivo ilegível ou de formato desconhecido é
-    ignorado, não derruba o build.
+    O formato já mudou duas vezes (atributos_destaque saiu no segundo dia; o
+    schema 2 tirou nome e órgãos de dentro das viradas). Arquivo ilegível
+    ou de formato desconhecido é ignorado, não derruba o build; o que passa
+    sai normalizado, com as viradas completas.
     """
     snapshot = comum.ler_json_tolerante(caminho)
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("viradas"), list):
         return None
-    # Os primeiros snapshots não carregavam "schema": são o formato 1.
-    schema = snapshot.get("schema")
-    if schema is not None and not (isinstance(schema, int) and schema <= SCHEMA_SUPORTADO):
+    if not schema_legivel(snapshot):
         print(
-            f"AVISO: {caminho} tem schema {schema!r}, acima do suportado "
-            f"({SCHEMA_SUPORTADO}); ignorado.",
+            f"AVISO: {caminho} tem schema {snapshot.get('schema')!r}, acima do "
+            f"suportado ({SCHEMA_SUPORTADO}); ignorado.",
             file=sys.stderr,
         )
         return None
-    return snapshot
+    return normalizar_snapshot(snapshot)
 
 
 def arquivos_historico(dir_historico, referencia, janela=None):
@@ -678,21 +832,57 @@ def bloco_historico(build, referencia):
             return f"<li>{link_ncm(build, ncm)} — {esc(texto)}</li>"
         return f"<li>{esc(ncm)} — {esc(texto)}</li>"
 
+    def item_lote(atributo, nome, texto):
+        # Um item por lote, como na home e no feed: a lista das NCMs vive na
+        # página do atributo - quando ele tem uma (build.com_pagina).
+        quem = nome or atributo
+        if atributo in build.com_pagina:
+            quem = link_atributo(build, atributo, quem)
+        else:
+            quem = esc(quem)
+        return f"<li>{quem} {esc(texto)}</li>"
+
     partes = ["<h2>O que mudou nos últimos 30 dias</h2>"]
     if novas:
+        lotes, soltas = agrupar_viradas(novas)
         itens = "".join(
+            item_lote(
+                lote["atributo"],
+                lote["nome"],
+                f"vira obrigatório em {br(lote['data'])} para "
+                f"{milhar(len(lote['ncms']))} NCMs",
+            )
+            for lote in lotes
+        )
+        itens += "".join(
             item(
                 v["ncm"],
                 f"{v.get('nome') or v['atributo']}, a partir de "
                 f"{br(v['vira_obrigatorio_em'])}",
             )
-            for v in sorted(novas, key=lambda x: x["vira_obrigatorio_em"])
+            for v in sorted(soltas, key=lambda x: x["vira_obrigatorio_em"])
         )
         partes.append(f"<h3>Viradas novas</h3><ul>{itens}</ul>")
     if sumiram:
+        # O mesmo limiar de lote, por atributo: quando uma virada em massa
+        # passa da data, ela sai da lista em massa.
+        por_atributo = {}
+        for n, c in sumiram:
+            por_atributo.setdefault(c, []).append(n)
+        em_lote = {c for c, ns in por_atributo.items() if len(ns) > LIMIAR_LOTE}
+        itens = "".join(
+            item_lote(
+                c,
+                vistos_antes.get((por_atributo[c][0], c)),
+                f"saiu da lista para {milhar(len(por_atributo[c]))} NCMs",
+            )
+            for c in sorted(em_lote)
+        )
         # Mostra o NOME, como a lista de cima. Antes esta mostrava o código
         # cru (ATT_13241) para o mesmo conceito.
-        itens = "".join(item(n, vistos_antes.get((n, c)) or c) for n, c in sumiram)
+        itens += "".join(
+            item(n, vistos_antes.get((n, c)) or c) for n, c in sumiram if c not in em_lote
+        )
         partes.append(
             "<h3>Saíram da lista</h3><p style='font-size:.92rem;color:var(--muted)'>"
             "Já passaram da data ou foram removidas pela Receita.</p>"
@@ -743,7 +933,7 @@ def gerar_index(build):
             '<div class="contagem-fatos">'
             f"<div><span>corte</span>{br(proxima)}</div>"
             f"<div><span>órgão</span>{juntos}</div>"
-            f"<div><span>vínculos</span>{no_corte} de {len(vs)}</div>"
+            f"<div><span>vínculos</span>{milhar(no_corte)} de {milhar(len(vs))}</div>"
             f"<div><span>próximo</span>{seguinte}</div>"
             "</div></div>"
         )
@@ -752,14 +942,15 @@ def gerar_index(build):
             if dias == 0
             else ("amanhã" if dias == 1 else f"nos próximos {dias} dias")
         )
+        # milhar(): numa virada em massa são 10 mil, e "10530" não se lê.
         h1 = (
-            f"{len(vs)} {plural(len(vs), 'atributo', 'atributos')} de NCM "
+            f"{milhar(len(vs))} {plural(len(vs), 'atributo', 'atributos')} de NCM "
             f"{plural(len(vs), 'vira', 'viram')} "
             f"{plural(len(vs), 'obrigatório', 'obrigatórios')} {prazo_h1}"
         )
         lede = (
-            f"{plural(len(vs), 'É', 'São')} {len(vs)} "
-            f"{plural(len(vs), 'vínculo', 'vínculos')} em {ncms} "
+            f"{plural(len(vs), 'É', 'São')} {milhar(len(vs))} "
+            f"{plural(len(vs), 'vínculo', 'vínculos')} em {milhar(ncms)} "
             f"{plural(ncms, 'NCM', 'NCMs')}. "
             f"Os produtos {plural(ncms, 'dessa NCM', 'dessas NCMs')} que estiverem "
             f"sem "
@@ -767,8 +958,8 @@ def gerar_index(build):
             f"na data são desativados no Catálogo de Produtos do Portal Único."
         )
         descricao = (
-            f"{len(vs)} {plural(len(vs), 'atributo', 'atributos')} em "
-            f"{ncms} {plural(ncms, 'NCM', 'NCMs')} "
+            f"{milhar(len(vs))} {plural(len(vs), 'atributo', 'atributos')} em "
+            f"{milhar(ncms)} {plural(ncms, 'NCM', 'NCMs')} "
             f"{plural(len(vs), 'vira', 'viram')} "
             f"{plural(len(vs), 'obrigatório', 'obrigatórios')} no Catálogo de "
             f"Produtos do Portal Único. Próximo corte em {br(proxima)}."
@@ -795,6 +986,9 @@ def gerar_index(build):
         cobertura = snapshot["data_referencia"]
 
     historico = bloco_historico(build, ref)
+    # h1, lede, description e o cartão contam TODAS as viradas, dentro e fora
+    # de lote: o lote só muda como a tabela as mostra, não quantas são.
+    lotes, soltas = agrupar_viradas(vs)
     corpo = preencher(
         template(build.caminhos.templates, "index.html"),
         {
@@ -802,7 +996,7 @@ def gerar_index(build):
             "h1": esc(h1),
             "lede": esc(lede),
             "cartao": cartao,
-            "tabela": tabela_viradas(build, vs, ref),
+            "tabela": tabela_viradas(build, lotes, soltas, ref),
             "historico": historico,
             "base": esc(prefixo(cfg)),
         },
@@ -881,10 +1075,11 @@ def gerar_ncms(build):
     """
     snapshot, completo, com_pagina = build.snapshot, build.completo, build.com_pagina
     ref = date.fromisoformat(snapshot["data_referencia"])
+    ref_iso = snapshot["data_referencia"]
     por_ncm = {}
     for v in snapshot["viradas"]:
         por_ncm.setdefault(v["ncm"], []).append(v)
-    fichas = {f["ncm"]: f for f in snapshot.get("ncms_afetadas", [])}
+    virando = {(v["ncm"], v["atributo"]) for v in snapshot["viradas"]}
     detalhes = completo.get("atributos", {})
     caminhos = []
 
@@ -898,23 +1093,37 @@ def gerar_ncms(build):
             (f"NCM {ncm}", f"/ncm/{ncm}/"),
         ]
 
-        if ncm in fichas:
-            atributos = fichas[ncm]["atributos"]
-        else:
-            atributos = []
-            for codigo, obrigatorio, modalidade in completo["ncms"][ncm]:
-                d = detalhes.get(codigo) or {}
-                atributos.append(
-                    {
-                        "codigo": codigo,
-                        "nome": d.get("n"),
-                        "obrigatorio": obrigatorio,
-                        "modalidade": modalidade,
-                        "orgaos": d.get("o") or [],
-                        "vira_obrigatorio_em": None,
-                    }
-                )
-            atributos.sort(key=lambda a: (not a["obrigatorio"], a["codigo"]))
+        # A ficha sai do mapa completo cruzado com as viradas: o snapshot não
+        # carrega mais uma ficha por NCM afetada (era o que crescia com o
+        # quadrado de uma virada em massa). Cada vínculo é
+        # [codigo, obrigatorio, modalidade, fim] - ver coletor.mapa_completo.
+        atributos = []
+        for codigo, obrigatorio, modalidade, fim in completo["ncms"][ncm]:
+            d = detalhes.get(codigo) or {}
+            atributos.append(
+                {
+                    "codigo": codigo,
+                    "nome": d.get("n"),
+                    "obrigatorio": obrigatorio,
+                    "modalidade": modalidade,
+                    "orgaos": d.get("o") or [],
+                    "fim": fim,
+                    "vira_obrigatorio_em": fim if (ncm, codigo) in virando else None,
+                    # Vencido e ainda opcional: a regra das viradas é fim >= hoje,
+                    # esta é o complemento dela. Ver tabela_atributos_ncm.
+                    "prazo_vencido": (
+                        obrigatorio is False and fim is not None and fim < ref_iso
+                    ),
+                }
+            )
+        atributos.sort(
+            key=lambda a: (
+                a["vira_obrigatorio_em"] is None,
+                not a["prazo_vencido"],
+                not a["obrigatorio"],
+                a["codigo"],
+            )
+        )
 
         orgaos_lista = sorted({o for a in atributos for o in (a.get("orgaos") or [])})
         obrigatorios = sum(1 for a in atributos if a.get("obrigatorio"))
@@ -1016,7 +1225,14 @@ def gerar_ncms(build):
                     "obrigatorio": bool(a.get("obrigatorio")),
                     "modalidade": a.get("modalidade"),
                     "orgaos": a.get("orgaos") or [],
+                    # O fim entra com o prazo vencido: a data que a tabela
+                    # mostra vem dele, e um prazo vencido que muda de data é
+                    # conteúdo novo.
+                    "fim": a.get("fim"),
                     "vira_obrigatorio_em": a.get("vira_obrigatorio_em"),
+                    # Entra porque é conteúdo: no dia seguinte ao prazo a
+                    # situação na tabela muda, e o lastmod tem de acompanhar.
+                    "prazo_vencido": a.get("prazo_vencido", False),
                     "pagina": a["codigo"] in com_pagina,
                     "detalhe": (
                         None if a["codigo"] in com_pagina else detalhes.get(a["codigo"])
@@ -1226,10 +1442,18 @@ def gerar_atributos(build):
         if vs:
             data = min(v["vira_obrigatorio_em"] for v in vs)
             ncms_v = sorted({v["ncm"] for v in vs})
-            lista = "".join(chip_ncm(n) for n in ncms_v)
+            # Numa virada em massa seriam 10 mil chips: o aviso lista as
+            # primeiras e remete ao índice por capítulo, que tem todas.
+            lista = "".join(chip_ncm(n) for n in ncms_v[:MAX_NCMS_AVISO])
+            if len(ncms_v) > MAX_NCMS_AVISO:
+                lista += (
+                    f"<li>e mais {milhar(len(ncms_v) - MAX_NCMS_AVISO)} NCMs — "
+                    f'<a href="{esc(url(build.cfg, "/ncm/"))}">veja o índice por '
+                    f"capítulo</a></li>"
+                )
             aviso = (
                 f'<div class="aviso"><strong>Este atributo vira obrigatório em '
-                f"{br(data)}</strong> para {len(ncms_v)} "
+                f"{br(data)}</strong> para {milhar(len(ncms_v))} "
                 f"{plural(len(ncms_v), 'NCM', 'NCMs')}:"
                 f'<ul class="limpa" style="margin-top:10px">{lista}</ul></div>'
             )
@@ -1823,9 +2047,31 @@ def gerar_feed(build):
     ref = snapshot["data_referencia"]
     vista = primeira_vista(build.caminhos.historico, date.fromisoformat(ref))
     pub = data_rfc822(ref)
+    lotes, soltas = agrupar_viradas(snapshot["viradas"])
 
     itens = []
-    for v in snapshot["viradas"]:
+    for lote in lotes:
+        # Um item por lote, com link para a página do atributo - o leitor de
+        # feed não precisa de 10 mil itens iguais a menos da NCM. O pubDate
+        # é o da NCM do lote vista há mais tempo.
+        atributo, data = lote["atributo"], lote["data"]
+        desc = (
+            f"O atributo {atributo} ({lote['nome'] or 'sem nome'}), exigido por "
+            f"{'/'.join(lote['orgaos']) or 'órgão não identificado'}, deixa de ser "
+            f"opcional em {por_extenso(data)} para {milhar(len(lote['ncms']))} NCMs. "
+            f"Produtos dessas NCMs sem ele preenchido são desativados no Catálogo "
+            f"de Produtos. A lista das NCMs está na página do atributo."
+        )
+        link = absoluta(cfg, f"/atributos/{atributo}/")
+        vistas = [vista.get((n, atributo, data)) for n in lote["ncms"]]
+        quando = min((d for d in vistas if data_valida(d)), default=ref)
+        itens.append(
+            f"<item><title>{esc(frase_lote(lote))}</title><link>{esc(link)}</link>"
+            f'<guid isPermaLink="false">{esc(f"{atributo}-{data}")}</guid>'
+            f"<description>{esc(desc)}</description>"
+            f"<pubDate>{data_rfc822(quando)}</pubDate></item>"
+        )
+    for v in soltas:
         titulo = (
             f"NCM {v['ncm']}: {v['nome'] or v['atributo']} "
             f"vira obrigatório em {br(v['vira_obrigatorio_em'])}"
@@ -1877,23 +2123,60 @@ def ler_lastmod(caminho):
     return anterior if isinstance(anterior, dict) else {}
 
 
-def calcular_lastmod(anterior, paginas, hoje):
+def hash_templates(caminhos):
+    """sha256 do conteúdo de templates/* e de fontes/fontes.css, em ordem de nome.
+
+    É o sinal direto de rebuild, guardado em lastmod.json sob CHAVE_TEMPLATES:
+    quando ele muda, o HTML das 11 mil páginas mudou sem que o dado tenha
+    mudado. Antes o rebuild era inferido do tamanho da lista de mudanças
+    (um teto de 200 URLs), o que confundia uma virada em massa - mudança de
+    conteúdo de verdade - com uma troca de CSS.
+    """
+    arquivos = []
+    if os.path.isdir(caminhos.templates):
+        arquivos += sorted(
+            os.path.join(caminhos.templates, nome)
+            for nome in os.listdir(caminhos.templates)
+            if os.path.isfile(os.path.join(caminhos.templates, nome))
+        )
+    fontes_css = os.path.join(caminhos.fontes, "fontes.css")
+    if os.path.isfile(fontes_css):
+        arquivos.append(fontes_css)
+    resumo = hashlib.sha256()
+    for arquivo in arquivos:
+        with open(arquivo, "rb") as f:
+            resumo.update(f.read())
+    return resumo.hexdigest()
+
+
+def calcular_lastmod(anterior, paginas, hoje, marca_templates):
     """lastmod honesto: a data em que a página mudou pela última vez.
 
     Carimbar hoje nas 10 mil URLs todo dia é a mentira que faz o Google parar
     de acreditar no lastmod - e quem perde são exatamente as poucas páginas
     que mudaram de verdade. Pura: anterior é o mapa lido de lastmod.json,
-    paginas é {caminho: hash}; devolve (mapa_novo, lista_de_mudadas).
+    paginas é {caminho: hash}, marca_templates é hash_templates(); devolve
+    (mapa_novo, lista_de_mudadas, rebuild).
+
+    rebuild é True quando não há lastmod anterior ou quando os templates
+    mudaram desde ele: nos dois casos o HTML de toda página é outro, e quem
+    decide o que mandar ao IndexNow (gerar_sitemap) manda só a raiz. A lista
+    de mudadas continua honesta - só as páginas cujo DADO mudou -, porque é
+    ela que dá a data do sitemap. Chaves de metadado ("__...") nunca entram
+    na lista nem viram página.
     """
-    atual, mudadas = {}, []
+    rebuild = not anterior or anterior.get(CHAVE_TEMPLATES) != marca_templates
+    atual, mudadas = {CHAVE_TEMPLATES: marca_templates}, []
     for caminho, marca in paginas.items():
+        if caminho.startswith("__"):
+            continue
         antes = anterior.get(caminho)
         if isinstance(antes, list) and len(antes) == 2 and antes[0] == marca:
             atual[caminho] = antes
         else:
             atual[caminho] = [marca, hoje]
             mudadas.append(caminho)
-    return atual, mudadas
+    return atual, mudadas, rebuild
 
 
 def gravar_lastmod(caminho, atual):
@@ -1902,16 +2185,18 @@ def gravar_lastmod(caminho, atual):
     comum.gravar_json_atomico(caminho, atual, indent=0, sort_keys=True)
 
 
-def gerar_sitemap(build, caminhos, datas, mudadas):
+def gerar_sitemap(build, caminhos, datas, mudadas, rebuild=False):
     """Índice de sitemaps: 10 mil URLs num arquivo só é legal, mas ilegível.
 
-    datas é o mapa de calcular_lastmod ({caminho: [hash, data]}); mudadas, a
-    lista de caminhos cujo conteúdo mudou nesta geração.
+    datas é o mapa de calcular_lastmod ({caminho: [hash, data]}, mais a chave
+    de metadado dos templates, que é ignorada); mudadas, a lista de caminhos
+    cujo conteúdo mudou nesta geração; rebuild, o sinal de que o HTML de
+    toda página mudou sem mudança de dado.
     """
     cfg = build.cfg
     hoje = build.snapshot["data_referencia"]
 
-    ordenados = sorted(set(caminhos))
+    ordenados = sorted(c for c in set(caminhos) if not c.startswith("__"))
     grupos = {"ncm": [], "atributos": [], "geral": []}
     for c in ordenados:
         if c.startswith("/ncm/"):
@@ -1965,17 +2250,14 @@ def gerar_sitemap(build, caminhos, datas, mudadas):
     )
     escrever(build, ".nojekyll", "")
 
-    # O workflow lê este arquivo para pingar o IndexNow só com o que mudou.
-    # Acima do teto isso não é "mudou conteúdo", é rebuild (primeira geração,
-    # troca de template, lastmod.json perdido). Mandar 11 mil URLs nesse caso
-    # é ruído que só queima a credibilidade do ping.
-    if len(mudadas) > TETO_INDEXNOW:
-        aviso = sorted(mudadas)[:1]
-        escrever(build, "mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in aviso))
-    else:
-        escrever(
-            build, "mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in sorted(mudadas))
-        )
+    # O workflow lê este arquivo para pingar o IndexNow com o que mudou. Num
+    # rebuild (primeira geração, troca de template, lastmod.json perdido) o
+    # HTML de toda página é outro sem que o dado tenha mudado: mandar 11 mil
+    # URLs nesse caso é ruído que só queima a credibilidade do ping, e vai só
+    # a raiz. Fora disso vai a lista INTEIRA, sem teto - uma virada em massa
+    # muda 10 mil páginas de verdade, e indexnow.py a envia em lotes.
+    lista = ["/"] if rebuild else sorted(c for c in mudadas if not c.startswith("__"))
+    escrever(build, "mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in lista))
 
 
 def versoes_divergem(snapshot, catalogo, completo):
@@ -2018,11 +2300,26 @@ def montar_build(caminhos, cfg):
             f"os arquivos de dados não são da mesma colheita ({detalhe}). "
             f"Rode coletor.py de novo."
         )
+    if not schema_legivel(snapshot):
+        raise RuntimeError(
+            f"{caminhos.ultimo} tem schema {snapshot.get('schema')!r}, acima do "
+            f"suportado ({SCHEMA_SUPORTADO}). Atualize o gerador."
+        )
+    # O completo.json não é versionado: o render.yml o restaura de um cache
+    # que pode ser de antes de uma mudança de formato. Sem o fim de vigência
+    # por vínculo a ficha da NCM sairia sem "prazo vencido" e sem virada -
+    # errado com cara de saudável. Melhor recusar e pedir uma apuração nova.
+    if schema_de(completo) != SCHEMA_SUPORTADO:
+        raise RuntimeError(
+            f"{caminhos.completo} tem schema {schema_de(completo)!r}; este gerador "
+            f"espera {SCHEMA_SUPORTADO}. Rode coletor.py de novo (ou --de-arquivo "
+            f"com o ZIP da última release)."
+        )
 
     return Build(
         cfg=cfg,
         caminhos=caminhos,
-        snapshot=snapshot,
+        snapshot=normalizar_snapshot(snapshot),
         catalogo=catalogo,
         completo=completo,
         com_pagina={a["codigo"] for a in catalogo["atributos"]},
@@ -2031,7 +2328,9 @@ def montar_build(caminhos, cfg):
 
 
 def gerar(build):
-    """Apaga site/ e gera tudo de novo. Devolve (caminhos_publicados, mudadas).
+    """Apaga site/ e gera tudo de novo.
+
+    Devolve (caminhos_publicados, mudadas, rebuild).
 
     A ordem importa em dois pontos: os estáticos vêm antes de qualquer
     página (as páginas referenciam o nome com hash), e o sitemap vem por
@@ -2053,14 +2352,15 @@ def gerar(build):
     gerar_fontes(build)
     gerar_cname(build)
     gerar_indexnow(build)
-    datas, mudadas = calcular_lastmod(
+    datas, mudadas, rebuild = calcular_lastmod(
         ler_lastmod(build.caminhos.lastmod),
         build.paginas,
         build.snapshot["data_referencia"],
+        hash_templates(build.caminhos),
     )
     gravar_lastmod(build.caminhos.lastmod, datas)
-    gerar_sitemap(build, caminhos, datas, mudadas)
-    return caminhos, mudadas
+    gerar_sitemap(build, caminhos, datas, mudadas, rebuild)
+    return caminhos, mudadas, rebuild
 
 
 def analisar_argumentos(argv):
@@ -2097,15 +2397,21 @@ def main(argv=None):
     except RuntimeError as e:
         print(f"ERRO: {e}", file=sys.stderr)
         return 1
-    caminhos_publicados, mudadas = gerar(build)
+    caminhos_publicados, mudadas, rebuild = gerar(build)
 
     snapshot = build.snapshot
+    lotes, _ = agrupar_viradas(snapshot["viradas"])
     print(
         f"{len(caminhos_publicados)} paginas geradas em site/ "
         f"(referencia {br(snapshot['data_referencia'])}, "
-        f"{len(snapshot['viradas'])} viradas)"
+        f"{len(snapshot['viradas'])} viradas, {len(lotes)} em lote)"
     )
     print(f"{len(mudadas)} URLs com conteudo novo desde a ultima geracao")
+    if rebuild:
+        print(
+            "Rebuild (templates mudaram ou lastmod.json ausente): "
+            "mudancas.txt leva so a raiz."
+        )
     if not (cfg.get("form_embed_url") or cfg.get("contato_email")):
         print(
             "AVISO: captura nao configurada - defina contato_email (mailto) ou "

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from datetime import date
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -397,6 +398,49 @@ class TestHistorico(unittest.TestCase):
         self.assertIn("schema", erro.getvalue())
         self.assertIn("2026-08-21.json", erro.getvalue())
 
+    def test_snapshot_schema_1_do_historico_continua_lido(self):
+        # O histórico tem os dois formatos lado a lado: o 1 (nome e órgãos
+        # dentro de cada virada, ficha das NCMs afetadas, sem a chave
+        # "schema") e o 2 (mapa "atributos"). O bloco tem de cruzar os dois.
+        self._grava(
+            "2026-08-21.json",
+            json.dumps(
+                {
+                    "viradas": [
+                        {
+                            "ncm": "1",
+                            "atributo": "ATT_VELHO",
+                            "nome": "Nome do formato antigo",
+                            "orgaos": ["X"],
+                            "forma_preenchimento": "TEXTO",
+                            "vira_obrigatorio_em": "2026-08-21",
+                        }
+                    ],
+                    "ncms_afetadas": [{"ncm": "1", "atributos": []}],
+                }
+            ),
+        )
+        self._grava(
+            "2026-08-22.json",
+            json.dumps(
+                {
+                    "schema": 2,
+                    "viradas": [
+                        {
+                            "ncm": "2",
+                            "atributo": "ATT_NOVO",
+                            "vira_obrigatorio_em": "2099-01-01",
+                        }
+                    ],
+                    "atributos": {"ATT_NOVO": {"nome": "Nome do mapa", "orgaos": ["Y"]}},
+                }
+            ),
+        )
+        html = self._bloco()
+        self.assertIn("Nome do formato antigo", html)
+        self.assertIn("Nome do mapa, a partir de 01/01/2099", html)
+        self.assertNotIn("ATT_NOVO", html)
+
     def test_primeira_vista_e_a_data_mais_antiga(self):
         virada = {"ncm": "1", "atributo": "A", "vira_obrigatorio_em": "2099-01-01"}
         adiada = dict(virada, vira_obrigatorio_em="2099-02-01")
@@ -495,20 +539,178 @@ class TestFeed(unittest.TestCase):
             self._pubdates(self._feed(snap)), ["Sat, 22 Aug 2026 00:00:00 GMT"]
         )
 
+    def test_feed_agrupa_lote_num_item_so(self):
+        # 10 mil itens iguais a menos da NCM não são notícia: o lote vira um
+        # item, com link para a página do atributo e guid atributo-data.
+        lote = [
+            dict(self.SNAP["viradas"][0], ncm=f"{i:04d}.00.00")
+            for i in range(g.LIMIAR_LOTE + 1)
+        ]
+        solta = dict(self.SNAP["viradas"][0], atributo="ATT_2", nome="Solta")
+        snap = dict(self.SNAP, viradas=lote + [solta])
+        self._historico("2026-08-10.json", [lote[3]])
+        xml = self._feed(snap)
+        raiz = ET.fromstring(xml)
+        itens = raiz.findall(".//item")
+        self.assertEqual(len(itens), 2)
+        self.assertEqual(
+            itens[0].findtext("title"), "Teste vira obrigatório em 30/08/2026 para 51 NCMs"
+        )
+        self.assertEqual(
+            itens[0].findtext("link"), "https://exemplo.test/repo/atributos/ATT_1/"
+        )
+        self.assertEqual(itens[0].findtext("guid"), "ATT_1-2026-08-30")
+        # O pubDate do lote é o da NCM vista há mais tempo.
+        self.assertEqual(itens[0].findtext("pubDate"), "Mon, 10 Aug 2026 00:00:00 GMT")
+        self.assertIn("NCM 8415.10.90: Solta", itens[1].findtext("title"))
+
+
+def _viradas(n, atributo="ATT_1", data="2026-08-30", nome="Nome"):
+    return [
+        {
+            "ncm": f"{i:04d}.00.00",
+            "atributo": atributo,
+            "nome": nome,
+            "orgaos": ["X"],
+            "vira_obrigatorio_em": data,
+        }
+        for i in range(n)
+    ]
+
+
+class TestLotes(unittest.TestCase):
+    def test_agrupa_so_acima_do_limiar(self):
+        # Exatamente o limiar continua solto; um a mais vira lote.
+        no_limiar = _viradas(g.LIMIAR_LOTE)
+        lotes, soltas = g.agrupar_viradas(no_limiar)
+        self.assertEqual((lotes, soltas), ([], no_limiar))
+        acima = _viradas(g.LIMIAR_LOTE + 1)
+        lotes, soltas = g.agrupar_viradas(acima)
+        self.assertEqual(soltas, [])
+        self.assertEqual(len(lotes), 1)
+        self.assertEqual(lotes[0]["atributo"], "ATT_1")
+        self.assertEqual(lotes[0]["nome"], "Nome")
+        self.assertEqual(lotes[0]["orgaos"], ["X"])
+        self.assertEqual(lotes[0]["data"], "2026-08-30")
+        self.assertEqual(lotes[0]["ncms"], [v["ncm"] for v in acima])
+
+    def test_lote_e_por_atributo_e_data(self):
+        # O mesmo atributo em duas datas são dois grupos: um pode ser lote e
+        # o outro não.
+        a = _viradas(3, data="2026-09-01")
+        b = _viradas(3, data="2026-10-01")
+        outro = _viradas(3, atributo="ATT_2")
+        lotes, soltas = g.agrupar_viradas(a + b + outro, limiar=2)
+        self.assertEqual(
+            [(lote["data"], lote["atributo"]) for lote in lotes],
+            [("2026-08-30", "ATT_2"), ("2026-09-01", "ATT_1"), ("2026-10-01", "ATT_1")],
+        )
+        self.assertEqual(soltas, [])
+        lotes, soltas = g.agrupar_viradas(a + b[:2] + outro, limiar=2)
+        self.assertEqual(len(lotes), 2)
+        # As soltas mantêm a ordem recebida.
+        self.assertEqual(soltas, b[:2])
+
+    def test_frase_do_lote(self):
+        lote = g.agrupar_viradas(_viradas(1234), limiar=1)[0][0]
+        self.assertEqual(
+            g.frase_lote(lote), "Nome vira obrigatório em 30/08/2026 para 1.234 NCMs"
+        )
+        lote["nome"] = None
+        self.assertTrue(g.frase_lote(lote).startswith("ATT_1 vira"))
+
+    def test_tabela_da_home_tem_uma_linha_por_lote_e_o_teto_de_soltas(self):
+        build = _build(comum.RAIZ)
+        lotes, soltas = g.agrupar_viradas(_viradas(3) + _viradas(3, atributo="ATT_2"), 5)
+        self.assertEqual(lotes, [])
+        with mock.patch.object(g, "TETO_LINHAS_HOME", 4):
+            html = g.tabela_viradas(build, [], soltas, date(2026, 8, 22))
+        self.assertEqual(html.count('<td class="ncm"'), 4)
+        self.assertIn("mostra as 4 primeiras de 6 viradas", html)
+        self.assertIn('href="/repo/atributos/"', html)
+        lotes, soltas = g.agrupar_viradas(_viradas(3) + _viradas(1, atributo="ATT_2"), 2)
+        html = g.tabela_viradas(build, lotes, soltas, date(2026, 8, 22))
+        self.assertEqual(html.count('<tr class="lote">'), 1)
+        self.assertEqual(html.count('<td class="ncm"'), 1)
+        self.assertIn("<strong>3 NCMs</strong>", html)
+        self.assertIn(
+            '<a href="/repo/atributos/ATT_1/">veja as NCMs na página do atributo</a>', html
+        )
+        self.assertNotIn("mostra as", html)
+
+
+class TestNormalizarSnapshot(unittest.TestCase):
+    def test_schema_2_completa_as_viradas_pelo_mapa(self):
+        snap = {
+            "schema": 2,
+            "viradas": [
+                {"ncm": "1", "atributo": "A", "vira_obrigatorio_em": "2099-01-01"},
+                {"ncm": "2", "atributo": "B", "vira_obrigatorio_em": "2099-01-01"},
+            ],
+            "atributos": {
+                "A": {"nome": "Nome A", "orgaos": ["X"], "forma_preenchimento": "TEXTO"}
+            },
+        }
+        novo = g.normalizar_snapshot(snap)
+        self.assertEqual(
+            novo["viradas"][0],
+            {
+                "ncm": "1",
+                "atributo": "A",
+                "vira_obrigatorio_em": "2099-01-01",
+                "nome": "Nome A",
+                "orgaos": ["X"],
+                "forma_preenchimento": "TEXTO",
+            },
+        )
+        # Atributo fora do mapa: as chaves existem, vazias - nunca KeyError.
+        self.assertEqual(novo["viradas"][1]["nome"], None)
+        self.assertEqual(novo["viradas"][1]["orgaos"], [])
+        # Cópia: o dicionário recebido fica como estava.
+        self.assertNotIn("nome", snap["viradas"][0])
+
+    def test_schema_1_passa_inteiro_e_perde_a_ficha(self):
+        v = {
+            "ncm": "1",
+            "atributo": "A",
+            "nome": "N",
+            "orgaos": ["X"],
+            "vira_obrigatorio_em": "x",
+        }
+        snap = {"viradas": [v], "ncms_afetadas": [{"ncm": "1"}]}
+        novo = g.normalizar_snapshot(snap)
+        self.assertEqual(novo["viradas"][0]["nome"], "N")
+        self.assertIn("forma_preenchimento", novo["viradas"][0])
+        self.assertNotIn("ncms_afetadas", novo)
+        self.assertIn("ncms_afetadas", snap)
+
+    def test_schema_de(self):
+        self.assertEqual(g.schema_de({}), 1)
+        self.assertEqual(g.schema_de({"schema": 2}), 2)
+        self.assertTrue(g.schema_legivel({"schema": g.SCHEMA_SUPORTADO}))
+        self.assertFalse(g.schema_legivel({"schema": g.SCHEMA_SUPORTADO + 1}))
+        self.assertFalse(g.schema_legivel({"schema": "2"}))
+
 
 class TestLastmod(unittest.TestCase):
+    MARCA = "hash-dos-templates"
+
     def test_calcular_lastmod_mantem_data_quando_hash_igual(self):
         anterior = {
+            g.CHAVE_TEMPLATES: self.MARCA,
             "/": ["aaa", "2026-08-01"],
             "/ncm/1/": ["bbb", "2026-08-02"],
             "/sumiu/": ["ccc", "2026-08-03"],
             "/quebrado/": "lixo",
         }
         paginas = {"/": "aaa", "/ncm/1/": "novo", "/nova/": "ddd", "/quebrado/": "eee"}
-        atual, mudadas = g.calcular_lastmod(anterior, paginas, "2026-08-22")
+        atual, mudadas, rebuild = g.calcular_lastmod(
+            anterior, paginas, "2026-08-22", self.MARCA
+        )
         self.assertEqual(
             atual,
             {
+                g.CHAVE_TEMPLATES: self.MARCA,
                 "/": ["aaa", "2026-08-01"],
                 "/ncm/1/": ["novo", "2026-08-22"],
                 "/nova/": ["ddd", "2026-08-22"],
@@ -516,8 +718,54 @@ class TestLastmod(unittest.TestCase):
             },
         )
         self.assertEqual(sorted(mudadas), ["/ncm/1/", "/nova/", "/quebrado/"])
+        self.assertFalse(rebuild)
         # Pura: nao toca no mapa anterior.
         self.assertIn("/sumiu/", anterior)
+
+    def test_rebuild_sem_lastmod_anterior_ou_com_templates_diferentes(self):
+        paginas = {"/": "aaa"}
+        anterior = {g.CHAVE_TEMPLATES: self.MARCA, "/": ["aaa", "2026-08-01"]}
+        _, _, rebuild = g.calcular_lastmod({}, paginas, "2026-08-22", self.MARCA)
+        self.assertTrue(rebuild)
+        _, _, rebuild = g.calcular_lastmod(anterior, paginas, "2026-08-22", "outro")
+        self.assertTrue(rebuild)
+        # lastmod.json de antes da chave existir: rebuild, uma vez só.
+        _, _, rebuild = g.calcular_lastmod(
+            {"/": ["aaa", "2026-08-01"]}, paginas, "2026-08-22", self.MARCA
+        )
+        self.assertTrue(rebuild)
+        # Num rebuild por template, a data das páginas cujo dado não mudou
+        # fica: o lastmod continua honesto.
+        atual, mudadas, rebuild = g.calcular_lastmod(
+            anterior, paginas, "2026-08-22", "outro"
+        )
+        self.assertEqual(atual["/"], ["aaa", "2026-08-01"])
+        self.assertEqual(mudadas, [])
+
+    def test_chave_templates_nao_entra_nas_mudadas(self):
+        paginas = {"/": "aaa", "__templates__": "zzz", "__outra__": "y"}
+        atual, mudadas, _ = g.calcular_lastmod({}, paginas, "2026-08-22", self.MARCA)
+        self.assertEqual(mudadas, ["/"])
+        self.assertEqual(atual[g.CHAVE_TEMPLATES], self.MARCA)
+        self.assertNotIn("__outra__", atual)
+
+    def test_hash_templates_muda_com_o_conteudo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminhos = comum.Caminhos(raiz=tmp)
+            os.makedirs(caminhos.templates)
+            os.makedirs(caminhos.fontes)
+            with open(os.path.join(caminhos.templates, "a.html"), "w") as f:
+                f.write("a")
+            antes = g.hash_templates(caminhos)
+            self.assertEqual(antes, g.hash_templates(caminhos))
+            with open(os.path.join(caminhos.fontes, "fontes.css"), "w") as f:
+                f.write("b")
+            depois = g.hash_templates(caminhos)
+            self.assertNotEqual(antes, depois)
+            # Um arquivo de fontes que não é o fontes.css não entra.
+            with open(os.path.join(caminhos.fontes, "x.woff2"), "wb") as f:
+                f.write(b"\x00")
+            self.assertEqual(depois, g.hash_templates(caminhos))
 
     def test_assinatura_por_dados_ignora_a_ordem_das_chaves(self):
         a = g.assinatura_dados("t", "d", {"b": 1, "a": [{"y": 2, "x": 1}]})
@@ -579,10 +827,28 @@ class TestSitemap(unittest.TestCase):
         )
         self.assertEqual(self._le("mudancas.txt"), "https://exemplo.test/repo/ncm/a/\n")
 
-    def test_rebuild_acima_do_teto_manda_uma_url_so(self):
-        caminhos = [f"/ncm/{i}/" for i in range(g.TETO_INDEXNOW + 1)]
+    def test_rebuild_por_template_manda_so_a_raiz(self):
+        caminhos = [f"/ncm/{i}/" for i in range(5)]
+        g.gerar_sitemap(self.build, caminhos, {}, caminhos[:2], rebuild=True)
+        self.assertEqual(self._le("mudancas.txt"), "https://exemplo.test/repo/\n")
+
+    def test_mudancas_sem_teto_fora_de_rebuild(self):
+        # Uma virada em massa muda 10 mil páginas de verdade: vai tudo, e
+        # indexnow.py divide em lotes. O teto de 200 URLs não existe mais.
+        caminhos = [f"/ncm/{i:05d}/" for i in range(1000)]
         g.gerar_sitemap(self.build, caminhos, {}, list(caminhos))
-        self.assertEqual(self._le("mudancas.txt").count("\n"), 1)
+        linhas = self._le("mudancas.txt").splitlines()
+        self.assertEqual(len(linhas), 1000)
+        self.assertEqual(linhas[0], "https://exemplo.test/repo/ncm/00000/")
+
+    def test_chave_templates_nao_vira_url(self):
+        caminhos = ["/", "/ncm/a/", g.CHAVE_TEMPLATES]
+        datas = {g.CHAVE_TEMPLATES: "abc", "/": ["h", "2026-08-01"]}
+        g.gerar_sitemap(self.build, caminhos, datas, list(caminhos))
+        for nome in os.listdir(self.build.caminhos.site):
+            if nome.endswith(".xml") or nome == "mudancas.txt":
+                self.assertNotIn("__", self._le(nome), nome)
+        self.assertEqual(len(self._le("mudancas.txt").splitlines()), 2)
 
 
 class TestPagina(unittest.TestCase):

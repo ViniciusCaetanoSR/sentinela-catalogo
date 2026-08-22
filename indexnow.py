@@ -25,12 +25,11 @@ CANDIDATOS = (
     os.path.join(comum.padrao().site, "mudancas.txt"),
 )
 ENDPOINT = "https://api.indexnow.org/IndexNow"
-# Espelha TETO_INDEXNOW do gerador, não o protocolo: o IndexNow aceita até
-# 10 000 URLs por POST. Acima de 200 o build não "mudou conteúdo", foi refeito
-# do zero (primeira geração, troca de template, lastmod.json perdido), e o
-# gerador já terá podado a lista para a raiz. Se chegar mais do que isso aqui,
-# alguém gerou o mudancas.txt por fora — a poda se repete por garantia.
-MAXIMO = 200
+# O máximo de URLs por POST que o protocolo aceita. A lista vai inteira, em
+# lotes sequenciais deste tamanho: quem decide se vale pingar 10 mil URLs é
+# o gerador (um rebuild manda só a raiz; uma virada em massa manda todas,
+# porque 10 mil páginas mudaram de verdade). Aqui não há poda.
+LOTE = 10000
 # O mesmo User-Agent do coletor, sem importar o coletor: o import arrastaria
 # zoneinfo e a lógica de coleta para um script que só faz um POST, e um erro
 # lá derrubaria o ping por motivo alheio a ele. comum.py não tem nada disso.
@@ -149,32 +148,41 @@ def main():
             f"descartada(s); a primeira: {descartadas[0]}",
             file=sys.stderr,
         )
-    if len(lista) > MAXIMO:
-        print(f"{len(lista)} URLs é lote demais - submetendo só a primeira.")
-        lista = lista[:1]
+    lotes = [lista[i : i + LOTE] for i in range(0, len(lista), LOTE)]
+    for numero, lote in enumerate(lotes, start=1):
+        if not enviar(cfg, chave, lote, numero, len(lotes)):
+            # O que derrubou este lote (chave não encontrada, rede fora)
+            # derrubaria os seguintes: parar aqui poupa as requisições, e a
+            # próxima geração reenvia o que mudar.
+            return 1
+    return 0
 
-    corpo = json.dumps(montar_payload(cfg, chave, lista)).encode("utf-8")
+
+def enviar(cfg, chave, lote, numero, total):
+    """Um POST com um lote de URLs. Devolve True se o IndexNow aceitou."""
+    corpo = json.dumps(montar_payload(cfg, chave, lote)).encode("utf-8")
     req = urllib.request.Request(
         ENDPOINT,
         data=corpo,
         method="POST",
         headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": AGENTE},
     )
+    rotulo = f" (lote {numero}/{total})" if total > 1 else ""
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            print(f"IndexNow respondeu {r.status} para {len(lista)} URLs.")
+            print(f"IndexNow respondeu {r.status} para {len(lote)} URLs{rotulo}.")
     except urllib.error.HTTPError as e:
         # 422 costuma ser chave não encontrada no domínio. Não é motivo para
         # derrubar o workflow: o site já foi publicado.
-        print(f"IndexNow devolveu {e.code}: {e.reason}", file=sys.stderr)
+        print(f"IndexNow devolveu {e.code}{rotulo}: {e.reason}", file=sys.stderr)
         detalhe = _corpo_do_erro(e)
         if detalhe:
             print(f"Corpo da resposta: {detalhe}", file=sys.stderr)
-        return 1
+        return False
     except urllib.error.URLError as e:
-        print(f"IndexNow inacessível: {e.reason}", file=sys.stderr)
-        return 1
-    return 0
+        print(f"IndexNow inacessível{rotulo}: {e.reason}", file=sys.stderr)
+        return False
+    return True
 
 
 if __name__ == "__main__":

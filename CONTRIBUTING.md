@@ -11,7 +11,7 @@ Uma página. Se algo aqui parecer arbitrário, o `git log` e os comentários do 
 - **Escrita atômica**: `comum.gravar_atomico` e irmãs (arquivo `.tmp` + `os.replace`). Nunca `open(..., "w")` direto em `dados/`.
 - **Nada de constante de módulo para caminho**: tudo vem de `comum.Caminhos` (no gerador, de `build.caminhos`). É o que permite aos testes rodar inteiros num diretório temporário sem remendar globais.
 - **`esc()` em toda interpolação de dado oficial** nos templates. O arquivo da Receita é entrada externa.
-- **Constantes nomeadas** para todo número que signifique alguma coisa (`PISO`, `POR_SITEMAP`, `TETO_INDEXNOW`).
+- **Constantes nomeadas** para todo número que signifique alguma coisa (`PISO`, `POR_SITEMAP`, `LIMIAR_LOTE`).
 - Estilo mecânico é do `ruff` (`pyproject.toml`): linha de 92 colunas, aspas duplas, imports ordenados.
 
 ```bash
@@ -22,7 +22,7 @@ python -m ruff format --check .            # ou `ruff format .` para aplicar
 
 ## Testes
 
-- **Obrigatórios e rápidos.** A suíte inteira roda em cerca de 2 s e **nunca toca a rede** — `tests/apoio.py` faz `urlopen` levantar em todo módulo de teste (`proibir_rede()` no `setUpModule`), o coletor é testado com respostas falsas e a fixture em `tests/fixtures/`. Um teste que precise de internet fica vermelho, não lento.
+- **Obrigatórios e rápidos.** A suíte inteira roda em cerca de 3 s e **nunca toca a rede** — `tests/apoio.py` faz `urlopen` levantar em todo módulo de teste (`proibir_rede()` no `setUpModule`), o coletor é testado com respostas falsas e a fixture em `tests/fixtures/`. Um teste que precise de internet fica vermelho, não lento.
 - **Ambiente de teste é `apoio.ambiente(tmp)`**: devolve um `Caminhos` num diretório temporário com templates, fontes e `config.json`; `apoio.montar_dados()` produz `dados/` pelo mesmo caminho da produção (`apurar` + `gravar`). Não remonte o snapshot à mão.
 - Todo bug corrigido ganha um teste com nome que diz o que ele prova (`test_colheita_degenerada_nao_grava_nada`).
 - `tests/test_integridade.py` gera o site inteiro a partir da fixture e confere todo link interno. Se você mexeu em template, é ele que vai te pegar.

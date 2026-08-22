@@ -82,7 +82,15 @@ TETO_RETRY_AFTER = 300
 # dados/historico/ escritos por versões antigas do código e IGNORA os que
 # declararem schema maior do que ele suporta - por isso toda mudança de
 # forma incompatível tem de incrementar este número.
-SCHEMA = 1
+#
+# 1: nome/orgaos/forma repetidos em cada virada e a ficha inteira de cada
+#    NCM afetada ("ncms_afetadas"). Crescia com o quadrado do problema: um
+#    atributo opcional em todas as NCMs (ATT_15540, cClassTrib) ganhando
+#    dataFimVigencia geraria ~13 MB por dia em historico/.
+# 2: as viradas carregam só o que é delas (ncm, atributo, datas, modalidade);
+#    o que é do atributo vai para o mapa "atributos", uma entrada por código;
+#    a ficha das NCMs some - o gerador a monta de completo.json + viradas.
+SCHEMA = 2
 
 # Os campos do snapshot que mudam a cada execução sem que o dado tenha
 # mudado moram em comum.VOLATEIS: é comum.reescrever_se_mudou quem os ignora.
@@ -90,6 +98,11 @@ VOLATEIS = comum.VOLATEIS
 
 # Quantas datas inválidas entram no snapshot e no log. Ver datas_invalidas().
 MAX_DATAS_LOGADAS = 20
+# Idem para os vínculos com prazo vencido e ainda opcionais. Ver vencidos_opcionais().
+MAX_VENCIDOS_LOGADOS = 20
+# Quantas viradas o resumo de main() lista antes de resumir o resto num
+# número: com uma virada em massa seriam 10 mil linhas no log do Actions.
+MAX_VIRADAS_LISTADAS = 50
 # Quantos problemas de forma cabem numa mensagem de erro legível.
 MAX_PROBLEMAS_LISTADOS = 10
 
@@ -453,7 +466,6 @@ def viradas(dados, referencia=None):
     justamente o que sumia da página - a cópia "É hoje." nunca rodava.
     """
     ref = (referencia or hoje_br()).isoformat()
-    dic = dicionario_atributos(dados)
     achados = []
 
     for ncm in lista_ncms(dados):
@@ -468,7 +480,9 @@ def viradas(dados, referencia=None):
             if vinculo.get("obrigatorio") is not False:
                 continue
 
-            detalhe = dic.get(vinculo["codigo"], {})
+            # Só o que é do VÍNCULO. Nome, órgãos e forma são do atributo e
+            # moram em atributos_das_viradas(): repetidos aqui, uma virada
+            # em massa multiplicava o mesmo nome por 10 mil linhas.
             achados.append(
                 {
                     "ncm": codigo_ncm,
@@ -476,14 +490,49 @@ def viradas(dados, referencia=None):
                     "vira_obrigatorio_em": fim,
                     "vigente_desde": vinculo.get("dataInicioVigencia"),
                     "modalidade": vinculo.get("modalidade"),
-                    "nome": nome_de(detalhe),
-                    "orgaos": detalhe.get("orgaos") or [],
-                    "forma_preenchimento": detalhe.get("formaPreenchimento"),
                 }
             )
 
     achados.sort(key=lambda x: (x["vira_obrigatorio_em"], x["ncm"], x["atributo"]))
     return achados
+
+
+def atributos_das_viradas(dados, lista_viradas):
+    """código -> {nome, orgaos, forma_preenchimento} dos atributos com virada.
+
+    É a outra metade do snapshot: o que antes viajava dentro de cada virada
+    e agora viaja uma vez por atributo. Quem cruza os dois é o gerador
+    (normalizar_snapshot), que também sabe ler o formato antigo.
+    """
+    dic = dicionario_atributos(dados)
+    saida = {}
+    for codigo in sorted({v["atributo"] for v in lista_viradas}):
+        detalhe = dic.get(codigo, {})
+        saida[codigo] = {
+            "nome": nome_de(detalhe),
+            "orgaos": detalhe.get("orgaos") or [],
+            "forma_preenchimento": detalhe.get("formaPreenchimento"),
+        }
+    return saida
+
+
+def vencidos_opcionais(dados, referencia=None):
+    """(ncm, atributo, fim) de cada vínculo com prazo vencido e ainda opcional.
+
+    A hipótese central do produto - a Receita troca obrigatorio para true na
+    data de fim de vigência - nunca foi verificada. Se ela falhar, este é o
+    sinal: o vínculo continua false com a data no passado. Alimenta
+    contagens()["fim_vigencia_passado_opcional"], a invariante e a amostra
+    que main() lista.
+    """
+    ref = (referencia or hoje_br()).isoformat()
+    saida = []
+    for ncm in lista_ncms(dados):
+        for v in vinculos_de(ncm):
+            fim = _fim_vigencia(v)
+            if fim is not None and fim < ref and v.get("obrigatorio") is False:
+                saida.append((ncm["codigoNcm"], v["codigo"], fim))
+    return saida
 
 
 MAX_DOMINIO = 120
@@ -514,47 +563,6 @@ def detalhe_publico(detalhe):
             for d in dominio[:MAX_DOMINIO]
         ],
     }
-
-
-def ncms_afetadas(dados, lista_viradas):
-    """Ficha completa de cada NCM que tem virada agendada.
-
-    Mostra TODOS os atributos da NCM, marcando quais viram obrigatórios -
-    o importador precisa ver o contexto, não só a linha que muda.
-    """
-    alvo = {v["ncm"] for v in lista_viradas}
-    virando = {(v["ncm"], v["atributo"]): v["vira_obrigatorio_em"] for v in lista_viradas}
-    dic = dicionario_atributos(dados)
-    saida = []
-
-    for ncm in lista_ncms(dados):
-        codigo = ncm["codigoNcm"]
-        if codigo not in alvo:
-            continue
-        atributos = []
-        for vinculo in vinculos_de(ncm):
-            detalhe = dic.get(vinculo["codigo"], {})
-            atributos.append(
-                {
-                    "codigo": vinculo["codigo"],
-                    "nome": nome_de(detalhe),
-                    "obrigatorio": vinculo.get("obrigatorio"),
-                    "modalidade": vinculo.get("modalidade"),
-                    "orgaos": detalhe.get("orgaos") or [],
-                    "vira_obrigatorio_em": virando.get((codigo, vinculo["codigo"])),
-                }
-            )
-        atributos.sort(
-            key=lambda a: (
-                a["vira_obrigatorio_em"] is None,
-                not a["obrigatorio"],
-                a["codigo"],
-            )
-        )
-        saida.append({"ncm": codigo, "atributos": atributos})
-
-    saida.sort(key=lambda x: x["ncm"])
-    return saida
 
 
 # Números longos dentro da definição são o código da NCM. Trocados por "#"
@@ -645,6 +653,14 @@ def mapa_completo(dados, com_pagina):
     Não é versionado: são ~73 mil vínculos que mudam todo dia. O gerador
     consome no mesmo run do CI e o arquivo morre com o runner.
 
+    Cada vínculo é [codigo, obrigatorio, modalidade, fim]: o fim de vigência
+    normalizado (ou None) viaja aqui porque é deste mapa, cruzado com as
+    viradas do snapshot, que o gerador monta a ficha de cada NCM - e é só
+    com ele que a página pode dizer "prazo vencido" quando a data passou e
+    o vínculo continua opcional. O "schema" espelha o do snapshot: os dois
+    mudam juntos, e um completo.json de cache antigo é recusado pelo gerador
+    em vez de render uma ficha sem datas.
+
     Quem NÃO tem página própria viaja com orientação e domínio embutidos -
     o conteúdo não some, muda de lugar: passa a ser exibido dentro da
     página da NCM.
@@ -657,7 +673,8 @@ def mapa_completo(dados, com_pagina):
         if not vinculos:
             continue
         ncms[ncm["codigoNcm"]] = [
-            [v["codigo"], v.get("obrigatorio"), v.get("modalidade")] for v in vinculos
+            [v["codigo"], v.get("obrigatorio"), v.get("modalidade"), _fim_vigencia(v)]
+            for v in vinculos
         ]
         usados |= {v["codigo"] for v in vinculos}
 
@@ -678,7 +695,12 @@ def mapa_completo(dados, com_pagina):
                 item["dt"] = len(dominio)
         atributos[codigo] = item
 
-    return {"versao": dados.get("versao"), "ncms": ncms, "atributos": atributos}
+    return {
+        "schema": SCHEMA,
+        "versao": dados.get("versao"),
+        "ncms": ncms,
+        "atributos": atributos,
+    }
 
 
 def orgaos(atributos):
@@ -751,6 +773,9 @@ def contagens(dados, referencia=None):
         "com_fim_vigencia_futuro": sum(
             1 for v in vinculos if (_fim_vigencia(v) or "") >= hoje
         ),
+        # Prazo vencido e ainda opcional: se a Receita não trocar o campo na
+        # data, é aqui que aparece - e a página da NCM passa a dizer isso.
+        "fim_vigencia_passado_opcional": len(vencidos_opcionais(dados, referencia)),
         "datas_invalidas": len(datas_invalidas(dados)),
         "inicio_vigencia_futuro": sum(
             1 for v in vinculos if (v.get("dataInicioVigencia") or "") > hoje
@@ -936,6 +961,7 @@ def apurar(dados, ref, meta_http, snapshot_anterior=None, aceitar_queda=False):
     sha_atual = meta.get("sha256_json")
     vs = viradas(dados, ref)
     invalidas = datas_invalidas(dados)
+    vencidos = vencidos_opcionais(dados, ref)
 
     # O catálogo é SEMPRE recalculado, mesmo quando o JSON é idêntico ao de
     # ontem: ele é função do JSON, das viradas E da regra em
@@ -960,11 +986,12 @@ def apurar(dados, ref, meta_http, snapshot_anterior=None, aceitar_queda=False):
         "contagens": c,
         "invariantes_falhas": [nome for nome, ok in invariantes(c) if not ok],
         "datas_invalidas_amostra": [list(x) for x in invalidas[:MAX_DATAS_LOGADAS]],
+        "vencidos_opcionais_amostra": [list(x) for x in vencidos[:MAX_VENCIDOS_LOGADOS]],
         "portao_ignorado": bool(quedas_aceitas),
         "conteudo_identico": sha_anterior is not None and sha_atual == sha_anterior,
         "bruto_novo": sha_atual != sha_anterior,
         "viradas": vs,
-        "ncms_afetadas": ncms_afetadas(dados, vs),
+        "atributos": atributos_das_viradas(dados, vs),
         # Só gravar() sabe se o catálogo foi reescrito; a chave já nasce
         # aqui para o arquivo manter a ordem de sempre.
         "catalogo_reescrito": None,
@@ -1049,6 +1076,10 @@ def invariantes(c):
         ("obrigatorio sempre booleano", c.get("obrigatorio_nao_booleano") == 0),
         ("nenhuma dataFimVigencia invalida", c.get("datas_invalidas") == 0),
         ("nenhum inicio de vigencia futuro", c.get("inicio_vigencia_futuro") == 0),
+        (
+            "nenhum fim de vigência passado ainda opcional",
+            c.get("fim_vigencia_passado_opcional") == 0,
+        ),
     ]
 
 
@@ -1142,6 +1173,15 @@ def main(argv=None):
     restantes = c.get("datas_invalidas", 0) - MAX_DATAS_LOGADAS
     if restantes > 0:
         avisar(f"... e mais {restantes} datas inválidas")
+    # A data passou e o vínculo continua opcional: ou a Receita não trocou o
+    # campo (a hipótese do produto falhou) ou o prazo foi prorrogado sem
+    # atualizar a data. Nos dois casos a página da NCM já diz "prazo vencido";
+    # aqui ficam os pares, para alguém conferir na fonte.
+    for ncm, atributo, fim in snapshot.get("vencidos_opcionais_amostra", []):
+        avisar(f"prazo vencido em {fim} e ainda opcional: NCM {ncm}, atributo {atributo}")
+    restantes = c.get("fim_vigencia_passado_opcional", 0) - MAX_VENCIDOS_LOGADOS
+    if restantes > 0:
+        avisar(f"... e mais {restantes} vínculos com prazo vencido ainda opcionais")
     # Há fim de vigência FUTURO no arquivo mas nenhuma virada: algo na forma
     # mudou e o filtro de viradas() deixou de enxergar. As datas já vencidas
     # ficam de fora - senão o aviso dispararia todo dia depois de um corte.
@@ -1163,12 +1203,16 @@ def main(argv=None):
         print("Nada mudou hoje: snapshot identico ao anterior, nada reescrito.")
     print()
     print(f"{len(v)} viradas agendadas (obrigatorio=false E dataFimVigencia >= hoje):")
-    for x in v:
-        orgao = "/".join(x["orgaos"]) or "-"
+    atributos = snapshot.get("atributos") or {}
+    for x in v[:MAX_VIRADAS_LISTADAS]:
+        detalhe = atributos.get(x["atributo"]) or {}
+        orgao = "/".join(detalhe.get("orgaos") or []) or "-"
         print(
             f"  {x['vira_obrigatorio_em']}  {x['ncm']}  {x['atributo']:<12} "
-            f"{orgao:<10} {x['nome'] or ''}"
+            f"{orgao:<10} {detalhe.get('nome') or ''}"
         )
+    if len(v) > MAX_VIRADAS_LISTADAS:
+        print(f"  ... e mais {len(v) - MAX_VIRADAS_LISTADAS} viradas")
     return 0
 
 

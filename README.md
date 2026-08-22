@@ -41,6 +41,7 @@ gerar_site.py   sem rede
                                                        sitemap não mentir)
 
 indexnow.py     lê     site/mudancas.txt + config.json -> POST no IndexNow
+                                                        (em lotes de 10 mil URLs)
 servir.py       serve  site/ em localhost como o Pages serviria
 ```
 
@@ -62,7 +63,7 @@ python coletor.py                         # baixa o ZIP oficial e apura (bate na
 python coletor.py --de-arquivo bruto.zip  # apura um ZIP já baixado — sem rede
 python gerar_site.py                      # gera site/ a partir de dados/ — sem rede
 python servir.py                          # http://localhost:8000/sentinela-catalogo/
-python -m unittest discover -s tests -v   # ~230 testes em cerca de 2 s, sem rede
+python -m unittest discover -s tests -v   # ~260 testes em cerca de 3 s, sem rede
 ```
 
 Os dois scripts principais aceitam argumentos para não tocar no `dados/` e no `site/` do repositório:
@@ -97,7 +98,7 @@ Dois scripts de verdade, dois auxiliares e um módulo comum; entre os scripts, n
 
 - **`comum.py`** é o que eles dividem: `Caminhos` (todo arquivo e pasta, derivados de uma raiz — é o que deixa os testes apontarem tudo para um diretório temporário), a escrita atômica (`.tmp` + `os.replace`, para nunca deixar um JSON pela metade em `dados/`), o único leitor de `config.json` e as funções de URL. Não toca a rede nem conhece o formato do catálogo.
 - **`coletor.py`** é o único que toca a rede. `apurar()` é pura — do JSON carregado ao que será gravado, com a validação de forma e o portão de sanidade no meio — e `gravar()` escreve; `coletar()` liga as duas, baixando ou lendo um ZIP do disco (`--de-arquivo`).
-- **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. O estado de uma geração vive num `Build` passado explicitamente a cada função. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato.
+- **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. O estado de uma geração vive num `Build` passado explicitamente a cada função. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato. O arquivo guarda também, sob `__templates__`, o hash de `templates/` e de `fontes/fontes.css`: quando ele muda (ou quando o `lastmod.json` não existe) o build é um *rebuild* — o HTML de toda página mudou sem que o dado tenha mudado — e `mudancas.txt` leva só a raiz. Fora disso leva todas as URLs que mudaram, sem teto.
 - **`indexnow.py`** e **`servir.py`** são invólucros finos. O primeiro avisa os buscadores das URLs em `mudancas.txt`; o segundo é preview.
 - **`dados/`** é o estado. Versionado em `main` por enquanto, escrito só pelo bot (ver [CONTRIBUTING.md](CONTRIBUTING.md) sobre por que nunca entra em branch de feature). `completo.json` e `bruto.zip` ficam de fora por tamanho e churn.
 
@@ -111,6 +112,14 @@ Dois scripts de verdade, dois auxiliares e um módulo comum; entre os scripts, n
 | ~17 | uma por órgão anuente |
 
 Um atributo só ganha página própria se tiver algo próprio a dizer. Os que valem para **uma única NCM** e cuja prosa é boilerplate repetido — 586 atributos chamados "Destaque", com a mesma orientação de 31 caracteres — não ganham: o conteúdo deles aparece dentro da página da NCM, que é onde ele sempre pertenceu. Sem esse corte, dois terços do site eram quase-duplicatas e as 888 páginas de atributo produziam 118 títulos distintos.
+
+### Modo lote
+
+Hoje o maior grupo de viradas com o mesmo atributo e a mesma data tem 4 NCMs. Mas 32 atributos opcionais alcançam mais de 50 NCMs, e um deles — `ATT_15540`, o cClassTrib da reforma tributária — é opcional em **todas as 10.516**. Uma `dataFimVigencia` nele seriam 10.516 viradas no mesmo dia: 10.516 linhas na home, 10.516 itens no feed, uma home de 4,7 MB. Por isso existe o limiar (`LIMIAR_LOTE = 50`): quando um mesmo par (atributo, data) passa de 50 NCMs, ele vira **uma linha** na home ("cClassTrib vira obrigatório em 01/01/2027 para 10.516 NCMs", com link para a página do atributo), **um item** no feed e **um item** em "o que mudou". A página de cada NCM continua individual; a do atributo lista as 60 primeiras NCMs e remete ao índice por capítulo. Abaixo do limiar nada muda.
+
+### Prazo vencido
+
+A regra das viradas é `dataFimVigencia >= hoje`. O complemento dela — a data passou e o vínculo **continua** `obrigatorio: false` — é a hipótese central do produto falhando: a Receita não trocou o campo na data. Nunca foi verificada. Se acontecer, a tabela da NCM mostra **prazo vencido em DD/MM/AAAA** em vez de "opcional", o coletor conta em `fim_vigencia_passado_opcional`, a invariante "nenhum fim de vigência passado ainda opcional" falha e o log lista os pares (NCM, atributo) para alguém conferir na fonte.
 
 ## Portão de sanidade
 
@@ -163,6 +172,8 @@ Todas confirmadas contra o servidor real. Estão tratadas no código; não as re
 Não é fosso — o campo `dataFimVigencia` é aviso público, qualquer um lê. É **suprimento de conteúdo**: as viradas chegam em lotes e a lista esvazia entre eles. Sem o arquivo local não existe "o que mudou nos últimos 30 dias", e a página fica vazia. Custo marginal zero.
 
 A janela é de 30 **dias**, não dos 30 últimos arquivos: um dia perdido por falha de rede alargaria o período em silêncio.
+
+Cada snapshot declara o `schema` do seu formato (`coletor.SCHEMA`, hoje **2**). O gerador lê os formatos 1 e 2 e ignora, com aviso, o que vier acima do que conhece — o histórico carrega os dois lado a lado. No schema 1 cada virada repetia o nome e os órgãos do atributo e o snapshot trazia a ficha inteira de cada NCM afetada, o que crescia com o quadrado de uma virada em massa (~13 MB por dia no caso do cClassTrib). No 2 a virada carrega só o que é do vínculo (NCM, atributo, datas, modalidade), o que é do atributo vai uma vez para o mapa `atributos`, e a ficha da NCM é montada pelo gerador a partir de `completo.json` (que também leva `schema` e o fim de vigência de cada vínculo) — o mesmo caso cai para ~1,8 MB.
 
 ## Configuração
 

@@ -32,16 +32,19 @@ def setUpModule():
     apoio.proibir_rede()
 
 
-def _monta(destino, base_path, referencia=HOJE, ajustar=None):
+def _monta(destino, base_path, referencia=HOJE, ajustar=None, dados=None):
     """Roda coletor (sem rede) e gerador contra um diretorio temporario.
 
     Os dados saem de apurar() + gravar(), o mesmo caminho da producao; o
     gerador roda pela main(), com --raiz, como o workflow o chama.
     ajustar(snapshot, catalogo, completo) roda antes da gravacao, para os
-    testes que precisam de um dado deliberadamente errado.
+    testes que precisam de um dado deliberadamente errado; `dados` troca a
+    amostra por outro JSON (a fixture do modo lote, montada em memoria).
     """
     with apoio.ambiente(destino, {"base_path": base_path}) as caminhos:
-        apuracao = apoio.montar_dados(caminhos, apoio.amostra(), referencia, ajustar)
+        apuracao = apoio.montar_dados(
+            caminhos, dados if dados is not None else apoio.amostra(), referencia, ajustar
+        )
         # O gerador fala bastante; nos testes o que importa e o resultado.
         with (
             contextlib.redirect_stdout(io.StringIO()),
@@ -58,6 +61,11 @@ def _le(*partes):
 
 def _lastmod(destino):
     return json.loads(_le(destino, "dados", "lastmod.json"))
+
+
+def _tbody(html):
+    """So as linhas da tabela: a legenda da pagina tambem usa as etiquetas."""
+    return html.split("<tbody>")[1].split("</tbody>")[0]
 
 
 def _arquivos(raiz):
@@ -318,6 +326,185 @@ class TestSiteFecha(unittest.TestCase):
         primeiro = _lastmod(tmp.name)
         _monta(tmp.name, "/repo")
         self.assertEqual(primeiro, _lastmod(tmp.name))
+
+    def test_prazo_vencido_aparece_na_ncm(self):
+        # ATT_HOJE vira em 22/08. No dia 23 a Receita deveria ter trocado
+        # obrigatorio para true; a fixture mantem false - e a pagina diz
+        # "prazo vencido" em vez de "opcional". A hipotese central do
+        # produto nunca foi verificada: se falhar, o site diz a verdade.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 22))
+        antes = _lastmod(tmp.name)
+        tabela = _tbody(_le(tmp.name, "site", "ncm", "8418.69.20", "index.html"))
+        self.assertIn(
+            '<span class="tag muda">vira obrigatório em 22/08/2026</span>', tabela
+        )
+        self.assertNotIn("prazo vencido", tabela)
+
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 23))
+        depois = _lastmod(tmp.name)
+        tabela = _tbody(_le(tmp.name, "site", "ncm", "8418.69.20", "index.html"))
+        self.assertIn('<span class="tag venc">prazo vencido em 22/08/2026</span>', tabela)
+        self.assertNotIn("vira obrigatório em", tabela)
+        self.assertNotIn('<span class="tag opc">', tabela)
+        # A situacao mudou de verdade: o lastmod acompanha.
+        self.assertNotEqual(antes["/ncm/8418.69.20/"], depois["/ncm/8418.69.20/"])
+        # ATT_PASSADO (2020) esta vencido nos dois dias, e o obrigatorio com
+        # data (ATT_OBRIGATORIO_FUTURO) nunca e "vencido".
+        self.assertEqual(antes["/ncm/8436.21.00/"], depois["/ncm/8436.21.00/"])
+        self.assertIn(
+            "prazo vencido em 01/01/2020",
+            _tbody(_le(tmp.name, "site", "ncm", "8436.21.00", "index.html")),
+        )
+        self.assertNotIn(
+            "prazo vencido",
+            _tbody(_le(tmp.name, "site", "ncm", "8504.21.00", "index.html")),
+        )
+        self._confere_fechado(os.path.join(tmp.name, "site"), "/repo")
+
+
+class TestModoLote(unittest.TestCase):
+    """A virada em massa: um atributo opcional com a mesma data em mais de
+    LIMIAR_LOTE NCMs (o cClassTrib em miniatura)."""
+
+    # Acima do limiar do lote E do teto do aviso na pagina do atributo.
+    N = max(g.LIMIAR_LOTE, g.MAX_NCMS_AVISO) + 15
+    # No dia 23 ATT_HOJE ja passou: sobra UMA virada solta (ATT_FUTURO).
+    DIA = date(2026, 8, 23)
+
+    def _roda(self, tmp, n=N, referencia=DIA, data=apoio.DATA_LOTE):
+        codigo, site, _ = _monta(
+            tmp,
+            "/repo",
+            referencia=referencia,
+            dados=apoio.com_lote(apoio.amostra(), n, data=data),
+        )
+        self.assertEqual(codigo, 0)
+        return site
+
+    def test_modo_lote_agrupa_acima_do_limiar(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        site = self._roda(tmp.name)
+        home = _le(site, "index.html")
+        # Uma linha de lote e uma solta; a contagem segue por vinculo.
+        self.assertEqual(home.count('<tr class="lote">'), 1)
+        self.assertEqual(home.count('<td class="ncm"'), 1)
+        self.assertIn(f"<strong>{self.N} NCMs</strong>", home)
+        self.assertIn(
+            '<a href="/repo/atributos/ATT_LOTE/">veja as NCMs na página do atributo</a>',
+            home,
+        )
+        self.assertIn(f"<h1>{self.N + 1} atributos de NCM viram obrigatórios", home)
+        self.assertIn(f"São {self.N + 1} vínculos em {self.N + 1} NCMs.", home)
+        self.assertIn(f"<div><span>vínculos</span>{self.N} de {self.N + 1}</div>", home)
+        # Feed: um item para o lote, um para a solta.
+        feed = _le(site, "feed.xml")
+        self.assertEqual(feed.count("<item>"), 2)
+        self.assertIn(
+            f"vira obrigatório em 01/01/2027 para {self.N} NCMs</title>"
+            "<link>https://exemplo.test/repo/atributos/ATT_LOTE/</link>"
+            '<guid isPermaLink="false">ATT_LOTE-2027-01-01</guid>',
+            feed,
+        )
+        # A pagina do atributo lista ate MAX_NCMS_AVISO e remete ao indice.
+        atributo = _le(site, "atributos", "ATT_LOTE", "index.html")
+        aviso = atributo.split('<div class="aviso">')[1].split("</div>")[0]
+        self.assertEqual(aviso.count('<li><a href="/repo/ncm/'), g.MAX_NCMS_AVISO)
+        self.assertIn(
+            f"<li>e mais {self.N - g.MAX_NCMS_AVISO} NCMs — "
+            '<a href="/repo/ncm/">veja o índice por capítulo</a></li>',
+            aviso,
+        )
+        # A pagina de cada NCM do lote continua individual.
+        ncm = _le(site, "ncm", "9001.00.07", "index.html")
+        self.assertIn("vira obrigatório em 01/01/2027", ncm)
+        TestSiteFecha._confere_fechado(self, site, "/repo")
+
+    def test_no_limiar_nao_agrupa(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        site = self._roda(tmp.name, n=g.LIMIAR_LOTE)
+        home = _le(site, "index.html")
+        self.assertNotIn('<tr class="lote">', home)
+        self.assertEqual(home.count('<td class="ncm"'), g.LIMIAR_LOTE + 1)
+        self.assertEqual(_le(site, "feed.xml").count("<item>"), g.LIMIAR_LOTE + 1)
+
+    def test_o_que_mudou_tem_um_item_por_lote(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 22))
+        n = g.LIMIAR_LOTE + 1
+        site = self._roda(tmp.name, n=n, data="2026-09-01")
+        home = _le(site, "index.html")
+        self.assertIn("<h3>Viradas novas</h3>", home)
+        self.assertIn(
+            '<li><a href="/repo/atributos/ATT_LOTE/">Código de classificação '
+            f"tributária</a> vira obrigatório em 01/09/2026 para {n} NCMs</li>",
+            home,
+        )
+        self.assertNotIn("9001.00.07</a> — Código", home)
+        # E quando o lote passa da data (dentro da janela de 30 dias do
+        # historico), sai da lista em massa - um item, nao N.
+        self._roda(tmp.name, n=n, referencia=date(2026, 9, 2), data="2026-09-01")
+        home = _le(site, "index.html")
+        self.assertIn("<h3>Saíram da lista</h3>", home)
+        self.assertIn(f"saiu da lista para {n} NCMs</li>", home)
+        self.assertNotIn("9001.00.07</a> — Código", home)
+
+    def test_mudancas_sem_teto_fora_de_rebuild(self):
+        # Primeira geracao: rebuild (nao ha lastmod.json), so a raiz. Depois
+        # uma virada em massa: centenas de paginas novas, e vao todas -
+        # o teto de 200 URLs nao existe mais.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _monta(tmp.name, "/repo")
+        self.assertEqual(
+            _le(tmp.name, "site", "mudancas.txt"), "https://exemplo.test/repo/\n"
+        )
+        site = self._roda(tmp.name, n=220, referencia=HOJE)
+        linhas = _le(site, "mudancas.txt").splitlines()
+        self.assertGreater(len(linhas), 220)
+        self.assertIn("https://exemplo.test/repo/", linhas)
+        self.assertIn("https://exemplo.test/repo/ncm/9001.02.19/", linhas)
+        self.assertIn("https://exemplo.test/repo/atributos/ATT_LOTE/", linhas)
+
+
+class TestRebuild(unittest.TestCase):
+    def test_rebuild_por_template_manda_so_a_raiz(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _monta(tmp.name, "/repo")
+        primeiro = _lastmod(tmp.name)
+        self.assertIn(g.CHAVE_TEMPLATES, primeiro)
+        # Segunda geracao igual: nada mudou, mudancas.txt vazio.
+        _monta(tmp.name, "/repo")
+        self.assertEqual(_le(tmp.name, "site", "mudancas.txt"), "")
+        # Um CSS diferente: o HTML de toda pagina mudou sem mudanca de dado.
+        # mudancas.txt leva so a raiz e as datas do lastmod ficam.
+        estilo = os.path.join(tmp.name, "templates", "estilo.css")
+        with open(estilo, "a", encoding="utf-8") as f:
+            f.write("\n/* outro */\n")
+        _monta(tmp.name, "/repo")
+        segundo = _lastmod(tmp.name)
+        self.assertEqual(
+            _le(tmp.name, "site", "mudancas.txt"), "https://exemplo.test/repo/\n"
+        )
+        self.assertNotEqual(primeiro[g.CHAVE_TEMPLATES], segundo[g.CHAVE_TEMPLATES])
+        for chave in primeiro:
+            if chave != g.CHAVE_TEMPLATES:
+                self.assertEqual(primeiro[chave], segundo[chave], chave)
+
+    def test_chave_templates_nao_vira_url(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _, site, _ = _monta(tmp.name, "/repo")
+        self.assertIsInstance(_lastmod(tmp.name)[g.CHAVE_TEMPLATES], str)
+        for nome in os.listdir(site):
+            if nome.endswith(".xml") or nome == "mudancas.txt":
+                self.assertNotIn("__", _le(site, nome), nome)
+        self.assertFalse(os.path.exists(os.path.join(site, g.CHAVE_TEMPLATES)))
 
 
 if __name__ == "__main__":
