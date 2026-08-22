@@ -14,6 +14,11 @@
 <meta property="og:locale" content="pt_BR">
 <link rel="stylesheet" href="/fontes/fontes.css">
 <style>
+/* Transicao entre paginas: dissolve em vez do flash branco do navegador.
+   Uma linha, e onde nao ha suporte a navegacao segue normal. E crossfade,
+   nao deslocamento - por isso fica de pe sob prefers-reduced-motion. */
+@view-transition{navigation:auto}
+
 :root{
   --ground:#fbfaf9; --surface:#f4f2f0; --surface-2:#efebe7;
   --ink:#1e1e1e; --muted:#4a453f; --faint:#6b655e;
@@ -124,6 +129,17 @@ thead th:last-child,td.data{text-align:right}
 .prazo i{display:block;height:4px;background:var(--marca);width:var(--w,0)}
 .js .prazo i{width:0;transition:width .7s cubic-bezier(.22,.61,.36,1) .12s}
 .js .revelado .prazo i{width:var(--w,0)}
+/* Copiar codigo: utilidade antes de estetica. Codigo com pontos e chato
+   de selecionar com o mouse, e essa gente cola isso no sistema dela. */
+.copiar{font:inherit;font-size:.72rem;letter-spacing:0;text-transform:none;
+  color:var(--accent);background:none;border:1px solid var(--rule-strong);
+  border-radius:5px;padding:1px 7px;margin-left:8px;cursor:pointer;
+  vertical-align:middle;transition:background .14s ease,border-color .14s ease}
+.copiar:hover{background:var(--marca-tint);border-color:var(--marca-borda)}
+.copiar:focus-visible{outline:2px solid var(--marca);outline-offset:2px}
+.copiar[data-feito]{color:var(--ok);border-color:var(--ok-borda);background:var(--ok-bg)}
+html:not(.js) .copiar{display:none}
+
 .prazo-txt{font-family:var(--sans);font-size:.78rem;font-weight:600;color:var(--accent)}
 .prazo.urgente i{background:var(--urgente)}
 .prazo.urgente + .prazo-txt,.prazo-txt.urgente{color:var(--urgente)}
@@ -317,7 +333,7 @@ main .aviso{animation:sobe .5s ease-out .21s both}
 
    Degrada bem: sem IntersectionObserver, tudo e revelado de uma vez. */
 (function(){
-  var alvos = [].slice.call(document.querySelectorAll("tbody tr, .captura"));
+  var alvos = [].slice.call(document.querySelectorAll("tbody tr, .captura, ul.limpa li"));
   if(!alvos.length) return;
 
   function revelarTudo(){
@@ -345,6 +361,31 @@ main .aviso{animation:sobe .5s ease-out .21s both}
 
   /* rede de seguranca: nada pode ficar invisivel por falha do observer */
   setTimeout(revelarTudo, 3000);
+})();
+</script>
+<script>
+/* Copiar codigo. Sem clipboard API o botao nem aparece (CSS esconde quando
+   o JS nao roda; aqui removemos se a API faltar). */
+(function(){
+  var botoes = [].slice.call(document.querySelectorAll("[data-copiar]"));
+  if(!botoes.length) return;
+  if(!(navigator.clipboard && navigator.clipboard.writeText)){
+    botoes.forEach(function(b){ b.style.display = "none"; });
+    return;
+  }
+  botoes.forEach(function(b){
+    var original = b.textContent;
+    b.addEventListener("click", function(){
+      navigator.clipboard.writeText(b.getAttribute("data-copiar")).then(function(){
+        b.textContent = "copiado";
+        b.setAttribute("data-feito", "1");
+        setTimeout(function(){
+          b.textContent = original;
+          b.removeAttribute("data-feito");
+        }, 1400);
+      });
+    });
+  });
 })();
 </script>
 </body>
