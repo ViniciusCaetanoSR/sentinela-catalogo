@@ -237,38 +237,57 @@ tbody tr:nth-child(n+14){animation-delay:.84s}
 </footer>
 
 <script>
-/* Contagem do numero grande. So age se a camada 2 existir na pagina.
-   Sem JS, o numero fica no valor final - nada quebra.
+/* Contagem do numero grande.
 
-   O ritmo importa: o cartao entra com animacao de .6s apos .1s de atraso,
-   entao so fica solido aos 700ms. Contar rapido demais faz a animacao
-   terminar antes de o usuario conseguir ver - foi o que acontecia com
-   ease-out cubico em 900ms, que chegava ao valor final aos 630ms.
-   Por isso: comeca depois que o cartao aparece, dura proporcional ao alvo
-   e usa ease-out quadratico, que segura os ultimos digitos. */
+   Roda SEMPRE, inclusive com prefers-reduced-motion. Desvio deliberado do
+   patch original: um digito trocando no lugar nao e o tipo de movimento que
+   a preferencia visa (parallax, zoom, deslocamento grande). Todo o resto do
+   site continua respeitando a preferencia pelo @media no CSS.
+
+   Escrito defensivamente porque nao da para depurar no navegador do usuario:
+   nao depende de requestAnimationFrame, nao depende do DOM estar pronto, e
+   qualquer excecao cai no valor final em vez de deixar a pagina quebrada. */
 (function(){
-  var alvo = document.querySelector("[data-contagem]");
-  if(!alvo) return;
-  var fim = parseInt(alvo.getAttribute("data-contagem"), 10);
-  if(isNaN(fim) || fim <= 0) return;
-  var reduz = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if(reduz) return;
+  function iniciar(){
+    try{
+      var alvo = document.querySelector("[data-contagem]");
+      if(!alvo) return;
+      var fim = parseInt(alvo.getAttribute("data-contagem"), 10);
+      if(isNaN(fim) || fim <= 0) return;
 
-  var ATRASO = 200;                                    /* deixa o cartao surgir */
-  var dur = Math.min(1800, Math.max(700, fim * 120));  /* ~120ms por unidade */
+      var dur = Math.min(1800, Math.max(700, fim * 120));
+      var passos = Math.max(2, Math.min(fim, 30));
+      var intervalo = Math.round(dur / passos);
+      var i = 0;
 
-  alvo.textContent = "0";                              /* cartao ainda invisivel */
-  setTimeout(function(){
-    var t0 = performance.now();
-    function passo(agora){
-      var p = Math.min(1, (agora - t0) / dur);
-      var e = 1 - Math.pow(1 - p, 2);                  /* quadratico, nao cubico */
-      alvo.textContent = Math.round(fim * e);
-      if(p < 1) requestAnimationFrame(passo);
-      else alvo.textContent = fim;
+      alvo.textContent = "0";
+      var timer = setInterval(function(){
+        i++;
+        var p = i / passos;
+        if(p >= 1){
+          clearInterval(timer);
+          alvo.textContent = String(fim);
+          return;
+        }
+        alvo.textContent = String(Math.round(fim * (1 - Math.pow(1 - p, 2))));
+      }, intervalo);
+
+      /* rede de seguranca: se algo travar o intervalo, o numero nao fica errado */
+      setTimeout(function(){
+        clearInterval(timer);
+        alvo.textContent = String(fim);
+      }, dur + 800);
+    }catch(e){
+      var el = document.querySelector("[data-contagem]");
+      if(el) el.textContent = el.getAttribute("data-contagem");
     }
-    requestAnimationFrame(passo);
-  }, ATRASO);
+  }
+
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", function(){ setTimeout(iniciar, 200); });
+  }else{
+    setTimeout(iniciar, 200);
+  }
 })();
 </script>
 </body>
