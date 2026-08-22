@@ -1,0 +1,190 @@
+{
+  "versao": "999",
+  "listaNcm": [
+    {
+      "codigoNcm": "0101.21.00",
+      "listaAtributos": [
+        {"codigo": "ATT_OMITIDO", "obrigatorio": false, "modalidade": "IMPORTACAO", "dataInicioVigencia": "2020-01-01"},
+        {"codigo": "ATT_VAZIO", "obrigatorio": false, "modalidade": "IMPORTACAO", "dataFimVigencia": "", "dataInicioVigencia": "2020-01-01"}
+      ]
+    },
+    {
+      "codigoNcm": "0101.21.00",
+      "listaAtributos": [
+        {"codigo": "ATT_DUPLICADA", "obrigatorio": true, "modalidade": "IMPORTACAO"}
+      ]
+    },
+    {
+      "codigoNcm": "8415.10.90",
+      "listaAtributos": [
+        {"codigo": "ATT_FUTURO", "obrigatorio": false, "modalidade": "IMPORTACAO", "dataFimVigencia": "2099-12-31", "dataInicioVigencia": "2020-01-01"},
+        {"codigo": "ATT_LARGO", "obrigatorio": true, "modalidade": "IMPORTACAO"}
+      ]
+    },
+    {
+      "codigoNcm": "8418.69.20",
+      "listaAtributos": [
+        {"codigo": "ATT_HOJE", "obrigatorio": false, "modalidade": "IMPORTACAO", "dataFimVigencia": "2026-08-22", "dataInicioVigencia": "2020-01-01"}
+      ]
+    },
+    {
+      "codigoNcm": "8436.21.00",
+      "listaAtributos": [
+        {"codigo": "ATT_PASSADO", "obrigatorio": false, "modalidade": "IMPORTACAO", "dataFimVigencia": "2020-01-01"}
+      ]
+    },
+    {
+      "codigoNcm": "8504.21.00",
+      "listaAtributos": [
+        {"codigo": "ATT_OBRIGATORIO_FUTURO", "obrigatorio": true, "modalidade": "IMPORTACAO", "dataFimVigencia": "2099-12-31"}
+      ]
+    },
+    {
+      "codigoNcm": "8544.42.00",
+      "listaAtributos": [
+        {"codigo": "ATT_SEM_DETALHE", "obrigatorio": false, "modalidade": "IMPORTACAO"},
+        {"codigo": "", "obrigatorio": false, "modalidade": "IMPORTACAO"},
+        {"obrigatorio": false, "modalidade": "IMPORTACAO"}
+      ]
+    },
+    {
+      "codigoNcm": "8609.00.00",
+      "listaAtributos": [
+        {"codigo": "ATT_CLONE_A", "obrigatorio": false, "modalidade": "IMPORTACAO"},
+        {"codigo": "ATT_LARGO", "obrigatorio": false, "modalidade": "IMPORTACAO"}
+      ]
+    },
+    {
+      "codigoNcm": "8703.10.00",
+      "listaAtributos": [
+        {"codigo": "ATT_CLONE_B", "obrigatorio": false, "modalidade": "IMPORTACAO"},
+        {"codigo": "ATT_LARGO", "obrigatorio": false, "modalidade": "IMPORTACAO"}
+      ]
+    },
+    {
+      "codigoNcm": "9999.99.99",
+      "listaAtributos": []
+    },
+    {
+      "listaAtributos": [
+        {"codigo": "ATT_FANTASMA", "obrigatorio": true}
+      ]
+    }
+  ],
+  "detalhesAtributos": [
+    {
+      "codigo": "ATT_OMITIDO",
+      "nomeApresentacao": "Atributo sem data de fim",
+      "definicao": "Serve para o caso em que a chave dataFimVigencia nem existe.",
+      "orientacaoPreenchimento": "Preencher com o que estiver na nota.",
+      "formaPreenchimento": "TEXTO",
+      "orgaos": ["INMETRO"],
+      "dominio": []
+    },
+    {
+      "codigo": "ATT_VAZIO",
+      "nomeApresentacao": "Atributo com fim de vigência vazio",
+      "definicao": "Aqui dataFimVigencia vem como string vazia, a outra convenção.",
+      "orientacaoPreenchimento": "Comparar string vazia como data inverte o filtro.",
+      "formaPreenchimento": "TEXTO",
+      "orgaos": ["Sem órgão declarado"],
+      "dataFimVigencia": "",
+      "dominio": []
+    },
+    {
+      "codigo": "ATT_DUPLICADA",
+      "nomeApresentacao": "Atributo de NCM repetida",
+      "definicao": "A NCM 0101.21.00 aparece duas vezes na listaNcm.",
+      "formaPreenchimento": "BOOLEANO",
+      "orgaos": ["SECEX"],
+      "dominio": []
+    },
+    {
+      "codigo": "ATT_FUTURO",
+      "nomeApresentacao": "Referência de licenciamento",
+      "definicao": "Este é o único que deve aparecer como virada agendada distante.",
+      "orientacaoPreenchimento": "Informar o número da licença.",
+      "formaPreenchimento": "TEXTO",
+      "orgaos": ["INMETRO"],
+      "dominio": []
+    },
+    {
+      "codigo": "ATT_HOJE",
+      "nomeApresentacao": "Atributo que vira hoje",
+      "definicao": "A fronteira: dataFimVigencia igual à data de referência.",
+      "orientacaoPreenchimento": "Tem de continuar aparecendo no dia exato.",
+      "formaPreenchimento": "TEXTO",
+      "orgaos": ["INMETRO"],
+      "dominio": []
+    },
+    {
+      "codigo": "ATT_PASSADO",
+      "nomeApresentacao": "Atributo que já virou",
+      "definicao": "Data no passado: não entra mais na lista.",
+      "formaPreenchimento": "TEXTO",
+      "orgaos": ["INMETRO"],
+      "dominio": []
+    },
+    {
+      "codigo": "ATT_OBRIGATORIO_FUTURO",
+      "nomeApresentacao": "Já obrigatório com data",
+      "definicao": "obrigatorio true com dataFimVigencia futura: fora da regra.",
+      "formaPreenchimento": "TEXTO",
+      "orgaos": ["ANVISA"],
+      "dominio": []
+    },
+    {
+      "codigo": "ATT_LARGO",
+      "nomeApresentacao": "Atributo de alcance largo",
+      "definicao": "Aparece em três NCMs e tem lista de opções substantiva.",
+      "orientacaoPreenchimento": "Escolher uma das opções da tabela.",
+      "formaPreenchimento": "LISTA_ESTATICA",
+      "orgaos": ["MAPA", "SECEX"],
+      "dominio": [
+        {"codigo": "01", "descricao": "Primeira opção, com zero à esquerda"},
+        {"codigo": "02", "descricao": "Segunda opção"},
+        {"codigo": "03", "descricao": "Terceira opção"},
+        {"codigo": "99", "descricao": "Demais"}
+      ]
+    },
+    {
+      "codigo": "ATT_CLONE_A",
+      "nomeApresentacao": "Destaque",
+      "definicao": "Lista de destaques de exportação da NCM 86090000",
+      "orientacaoPreenchimento": "Escolher apenas um Destaque",
+      "formaPreenchimento": "LISTA_ESTATICA",
+      "orgaos": ["IBAMA"],
+      "dominio": [
+        {"codigo": "01", "descricao": "EXCETO DE ESPÉCIES DOMÉSTICAS"},
+        {"codigo": "99", "descricao": "DEMAIS"}
+      ]
+    },
+    {
+      "codigo": "ATT_CLONE_B",
+      "nomeApresentacao": "Destaque",
+      "definicao": "Lista de destaques de exportação da NCM 87031000",
+      "orientacaoPreenchimento": "Escolher apenas um Destaque",
+      "formaPreenchimento": "LISTA_ESTATICA",
+      "orgaos": ["IBAMA"],
+      "dominio": [
+        {"codigo": "01", "descricao": "EXCETO DE ESPÉCIES DOMÉSTICAS"},
+        {"codigo": "99", "descricao": "DEMAIS"}
+      ]
+    },
+    {
+      "codigo": "ATT_ORFAO",
+      "nomeApresentacao": "Detalhe sem vínculo",
+      "definicao": "Existe em detalhesAtributos mas nenhuma NCM aponta para ele.",
+      "formaPreenchimento": "TEXTO",
+      "orgaos": ["DPF"],
+      "dominio": []
+    },
+    {
+      "codigo": "",
+      "nomeApresentacao": "Detalhe sem código",
+      "definicao": "Registro capenga: tem de ser descartado sem derrubar a coleta.",
+      "orgaos": [],
+      "dominio": []
+    }
+  ]
+}
