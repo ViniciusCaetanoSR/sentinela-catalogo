@@ -18,100 +18,37 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import coletor  # noqa: E402
+import apoio  # noqa: E402
+import comum  # noqa: E402
 import gerar_site as g  # noqa: E402
 
-FIXTURE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "fixtures", "amostra.json"
-)
 HOJE = date(2026, 8, 22)
 
 RE_LINK = re.compile(r'(?:href|src)="([^"]+)"')
 EXTERNO = ("http://", "https://", "mailto:", "//", "#", "data:")
 
 
+def setUpModule():
+    apoio.proibir_rede()
+
+
 def _monta(destino, base_path, referencia=HOJE, ajustar=None):
     """Roda coletor (sem rede) e gerador contra um diretorio temporario.
 
+    Os dados saem de apurar() + gravar(), o mesmo caminho da producao; o
+    gerador roda pela main(), com --raiz, como o workflow o chama.
     ajustar(snapshot, catalogo, completo) roda antes da gravacao, para os
     testes que precisam de um dado deliberadamente errado.
     """
-    with open(FIXTURE, encoding="utf-8") as f:
-        dados = json.load(f)
-
-    vs = coletor.viradas(dados, referencia)
-    publicaveis = coletor.atributos_publicaveis(dados, vs)
-    snapshot = {
-        "schema": coletor.SCHEMA,
-        "coletado_em": f"{referencia.isoformat()}T06:00:00-03:00",
-        "data_referencia": referencia.isoformat(),
-        "fonte": coletor.URL,
-        "http": {"status": 200},
-        "contagens": coletor.contagens(dados, referencia),
-        "viradas": vs,
-        "ncms_afetadas": coletor.ncms_afetadas(dados, vs),
-    }
-    catalogo = {
-        "versao": dados.get("versao"),
-        "atributos": publicaveis,
-        "orgaos": coletor.orgaos(publicaveis),
-    }
-    com_pagina = {a["codigo"] for a in publicaveis}
-    completo = coletor.mapa_completo(dados, com_pagina)
-    if ajustar:
-        ajustar(snapshot, catalogo, completo)
-
-    dados_dir = os.path.join(destino, "dados")
-    os.makedirs(os.path.join(dados_dir, "historico"), exist_ok=True)
-    for nome, corpo in (
-        ("ultimo.json", snapshot),
-        ("atributos.json", catalogo),
-        ("completo.json", completo),
-    ):
-        with open(os.path.join(dados_dir, nome), "w", encoding="utf-8") as f:
-            json.dump(corpo, f, ensure_ascii=False)
-
-    cfg = os.path.join(destino, "config.json")
-    with open(cfg, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "base_url": "https://exemplo.test",
-                "base_path": base_path,
-                "contato_email": "a@b.test",
-            },
-            f,
-        )
-
-    guardado = {
-        n: getattr(g, n)
-        for n in (
-            "DIR_SITE",
-            "DIR_HISTORICO",
-            "ARQ_ULTIMO",
-            "ARQ_CONFIG",
-            "ARQ_ATRIBUTOS",
-            "ARQ_COMPLETO",
-            "ARQ_LASTMOD",
-        )
-    }
-    g.DIR_SITE = os.path.join(destino, "site")
-    g.DIR_HISTORICO = os.path.join(dados_dir, "historico")
-    g.ARQ_ULTIMO = os.path.join(dados_dir, "ultimo.json")
-    g.ARQ_CONFIG = cfg
-    g.ARQ_ATRIBUTOS = os.path.join(dados_dir, "atributos.json")
-    g.ARQ_COMPLETO = os.path.join(dados_dir, "completo.json")
-    g.ARQ_LASTMOD = os.path.join(dados_dir, "lastmod.json")
-    try:
+    with apoio.ambiente(destino, {"base_path": base_path}) as caminhos:
+        apuracao = apoio.montar_dados(caminhos, apoio.amostra(), referencia, ajustar)
         # O gerador fala bastante; nos testes o que importa e o resultado.
         with (
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            codigo = g.main()
-    finally:
-        for n, v in guardado.items():
-            setattr(g, n, v)
-    return codigo, os.path.join(destino, "site"), com_pagina
+            codigo = g.main(["--raiz", destino])
+    return codigo, caminhos.site, apuracao.com_pagina
 
 
 def _le(*partes):
@@ -263,7 +200,7 @@ class TestSiteFecha(unittest.TestCase):
             n for n in os.listdir(site) if n.startswith("app.") and n.endswith(".js")
         ]
         self.assertEqual(len(servidos), 1)
-        self.assertEqual(_le(site, servidos[0]), _le(g.DIR_TEMPLATES, "app.js"))
+        self.assertEqual(_le(site, servidos[0]), _le(comum.padrao().templates, "app.js"))
         folhas = [n for n in os.listdir(site) if n.startswith("estilo.")]
         self.assertEqual(len(folhas), 1)
         self.assertNotIn("/*", _le(site, folhas[0]))

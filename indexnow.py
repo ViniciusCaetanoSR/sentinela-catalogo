@@ -16,12 +16,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-RAIZ = os.path.dirname(os.path.abspath(__file__))
-ARQ_CONFIG = os.path.join(RAIZ, "config.json")
+import comum
+
+ARQ_CONFIG = comum.padrao().config
 # No CI o arquivo chega pelo artefato, na raiz; localmente ele está em site/.
 CANDIDATOS = (
-    os.path.join(RAIZ, "mudancas.txt"),
-    os.path.join(RAIZ, "site", "mudancas.txt"),
+    os.path.join(comum.RAIZ, "mudancas.txt"),
+    os.path.join(comum.padrao().site, "mudancas.txt"),
 )
 ENDPOINT = "https://api.indexnow.org/IndexNow"
 # Espelha TETO_INDEXNOW do gerador, não o protocolo: o IndexNow aceita até
@@ -30,23 +31,14 @@ ENDPOINT = "https://api.indexnow.org/IndexNow"
 # gerador já terá podado a lista para a raiz. Se chegar mais do que isso aqui,
 # alguém gerou o mudancas.txt por fora — a poda se repete por garantia.
 MAXIMO = 200
-# Cópia literal de coletor.AGENTE. Não importar coletor: o import arrastaria
-# zoneinfo e os caminhos de dados para um script que só faz um POST, e um
-# erro lá derrubaria o ping por motivo alheio a ele. Se mudar lá, mude aqui.
-AGENTE = (
-    "SentinelaDoCatalogo/0.1.0 (+https://github.com/viniciuscaetanosr/sentinela-catalogo)"
-)
+# O mesmo User-Agent do coletor, sem importar o coletor: o import arrastaria
+# zoneinfo e a lógica de coleta para um script que só faz um POST, e um erro
+# lá derrubaria o ping por motivo alheio a ele. comum.py não tem nada disso.
+AGENTE = comum.AGENTE
 # Quantos bytes do corpo de erro vão para o log. O IndexNow responde 422 com
 # um JSON curto dizendo o motivo (chave não encontrada, host divergente);
 # sem ele o código sozinho não diz o que corrigir.
 CORPO_NO_LOG = 300
-
-
-def config():
-    if not os.path.exists(ARQ_CONFIG):
-        return {}
-    with open(ARQ_CONFIG, encoding="utf-8") as f:
-        return json.load(f)
 
 
 def ler_urls(candidatos):
@@ -113,27 +105,28 @@ def montar_payload(cfg, chave, lista):
     """Corpo do POST. `host` é o netloc das URLs; `keyLocation` segue o
     base_path, porque em Pages de projeto a raiz do host não é nossa e o
     arquivo de chave está servido sob /<repo>/."""
-    base = cfg.get("base_url", "").rstrip("/")
-    prefixo = cfg.get("base_path", "").rstrip("/")
     return {
         "host": _host(lista[0]),
         "key": chave,
-        "keyLocation": base + prefixo + "/" + chave + ".txt",
+        "keyLocation": comum.absoluta(cfg, "/" + chave + ".txt"),
         "urlList": list(lista),
     }
 
 
 def _corpo_do_erro(e):
     """Primeiros bytes da resposta de erro, legíveis, ou vazio se não há corpo."""
+    # KeyError: no 3.9, um HTTPError sem corpo (fp=None) delega .read() a um
+    # invólucro de tempfile que levanta KeyError('file') em vez de
+    # AttributeError. Entre 3.9 e 3.12 é a única diferença.
     try:
         bruto = e.read()
-    except (AttributeError, OSError):
+    except (AttributeError, KeyError, OSError):
         return ""
     return bruto[:CORPO_NO_LOG].decode("utf-8", errors="replace").strip()
 
 
 def main():
-    cfg = config()
+    cfg = comum.carregar_config(ARQ_CONFIG)
     chave = cfg.get("indexnow_key")
     if not chave:
         print("indexnow_key vazio em config.json - nada a submeter.")

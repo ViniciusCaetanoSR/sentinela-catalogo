@@ -16,6 +16,9 @@ dev = ["ruff", "coverage"]
 [tool.ruff]
 line-length = 92
 target-version = "py39"
+# tests/apoio.py é módulo nosso, importado pelos testes ao lado dele: sem
+# isto o isort o trataria como biblioteca de terceiro.
+src = [".", "tests"]
 # site/ é gerado; dados/ é JSON. Nenhum dos dois tem Python para olhar.
 extend-exclude = ["site", "dados"]
 

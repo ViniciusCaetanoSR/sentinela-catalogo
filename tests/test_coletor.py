@@ -1,5 +1,6 @@
 """Testes do coletor. Sem rede: o ZIP é montado em memória."""
 
+import contextlib
 import http.client
 import io
 import json
@@ -16,18 +17,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import apoio  # noqa: E402
 import coletor  # noqa: E402
 
-FIXTURE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "fixtures", "amostra.json"
-)
 # A mesma data que a fixture usa em ATT_HOJE, para exercitar a fronteira.
 HOJE = date(2026, 8, 22)
+amostra = apoio.amostra
 
 
-def amostra():
-    with open(FIXTURE, encoding="utf-8") as f:
-        return json.load(f)
+def setUpModule():
+    apoio.proibir_rede()
 
 
 class TestFimVigencia(unittest.TestCase):
@@ -804,7 +803,7 @@ class TestMain(unittest.TestCase):
             mock.patch.object(coletor, "coletar", side_effect=erro),
             mock.patch("sys.stderr", new_callable=io.StringIO) as err,
         ):
-            codigo = coletor.main()
+            codigo = coletor.main([])
         return codigo, err.getvalue()
 
     def test_incomplete_read_devolve_1_com_mensagem(self):
@@ -823,26 +822,6 @@ class TestMain(unittest.TestCase):
         self.assertIn("colheita degenerada", err)
 
 
-class TestEscritaSemChurn(unittest.TestCase):
-    def test_nao_reescreve_quando_so_o_relogio_mudou(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            alvo = os.path.join(tmp, "s.json")
-            a = json.dumps({"coletado_em": "2026-08-22T01:00:00", "x": 1}, indent=1)
-            b = json.dumps({"coletado_em": "2026-08-22T02:00:00", "x": 1}, indent=1)
-            self.assertTrue(coletor._reescrever_se_mudou(alvo, a))
-            # 16 dos 18 primeiros commits do projeto não carregavam nada além
-            # deste campo.
-            self.assertFalse(coletor._reescrever_se_mudou(alvo, b))
-
-    def test_reescreve_quando_o_conteudo_muda(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            alvo = os.path.join(tmp, "s.json")
-            a = json.dumps({"coletado_em": "2026-08-22T01:00:00", "x": 1}, indent=1)
-            b = json.dumps({"coletado_em": "2026-08-22T01:00:00", "x": 2}, indent=1)
-            self.assertTrue(coletor._reescrever_se_mudou(alvo, a))
-            self.assertTrue(coletor._reescrever_se_mudou(alvo, b))
-
-
 def _arquivos_em(raiz):
     """Caminhos relativos de tudo que existe abaixo de raiz (vazio se não existe)."""
     achados = []
@@ -857,22 +836,17 @@ def _arquivos_em(raiz):
 class TestColetarFimAFim(unittest.TestCase):
     """coletar() inteira, num diretório temporário, com a rede falsa."""
 
-    # A fixture tem 9 NCMs: os pisos de produção nunca passariam.
-    PISO_BAIXO = {"ncms": 1, "vinculos": 1, "atributos_distintos": 1, "obrigatorios": 1}
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.dir = os.path.join(tmp.name, "dados")
-        for p in (
-            mock.patch.object(coletor, "PISO", self.PISO_BAIXO),
-            mock.patch("time.sleep"),
-            mock.patch.dict(os.environ, {"SENTINELA_ACEITAR_QUEDA": ""}),
-        ):
-            p.start()
-            self.addCleanup(p.stop)
+        pilha = contextlib.ExitStack()
+        self.addCleanup(pilha.close)
+        # O ambiente já baixa o PISO para o tamanho da fixture e fecha a
+        # válvula do portão.
+        self.caminhos = pilha.enter_context(apoio.ambiente(tmp.name, com_templates=False))
+        self.dir = self.caminhos.dados
 
-    def _coletar(self, dados, referencia=HOJE):
+    def _coletar(self, dados, referencia=HOJE, origem=None):
         corpo = _zip_de(json.dumps(dados).encode("utf-8"))
         with (
             mock.patch(
@@ -880,7 +854,7 @@ class TestColetarFimAFim(unittest.TestCase):
             ),
             mock.patch("sys.stderr", new_callable=io.StringIO) as err,
         ):
-            snapshot = coletor.coletar(referencia=referencia, dir_dados=self.dir)
+            snapshot = coletor.coletar(self.caminhos, referencia=referencia, origem=origem)
         return snapshot, err.getvalue()
 
     def test_colheita_degenerada_nao_grava_nada(self):
@@ -1069,7 +1043,7 @@ class TestColetarFimAFim(unittest.TestCase):
             mock.patch("sys.stderr", new_callable=io.StringIO) as err,
             mock.patch("sys.stdout", new_callable=io.StringIO) as out,
         ):
-            self.assertEqual(coletor.main(), 0)
+            self.assertEqual(coletor.main([]), 0)
         self.assertIn(
             "::warning::invariante violada: nenhum registro descartado", err.getvalue()
         )
@@ -1084,7 +1058,7 @@ class TestColetarFimAFim(unittest.TestCase):
             mock.patch("sys.stderr", new_callable=io.StringIO) as err,
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
-            coletor.main()
+            coletor.main([])
         return err.getvalue()
 
     def test_main_avisa_fim_de_vigencia_futuro_sem_virada(self):
@@ -1101,6 +1075,108 @@ class TestColetarFimAFim(unittest.TestCase):
         self.assertEqual(snapshot["viradas"], [])
         self.assertGreater(snapshot["contagens"]["com_fim_vigencia_futuro"], 0)
         self.assertIn("nenhuma virada agendada", self._stderr_do_main(snapshot))
+
+    def test_apurar_e_pura_e_nao_escreve_nada(self):
+        apuracao = coletor.apurar(amostra(), HOJE, apoio.meta_de(amostra(), HOJE))
+        self.assertEqual(_arquivos_em(self.dir), [])
+        self.assertGreater(len(apuracao.snapshot["viradas"]), 0)
+        self.assertEqual(
+            apuracao.com_pagina, {a["codigo"] for a in apuracao.catalogo["atributos"]}
+        )
+        # Quem imprime é quem chama: a fixture tem registros descartados, e o
+        # aviso do arquivo fora do dia só existe quando a data não bate.
+        self.assertIsNone(apuracao.snapshot["catalogo_reescrito"])
+        self.assertNotIn("gravado", apuracao.snapshot)
+        outro_dia = coletor.apurar(
+            amostra(), date(2026, 8, 23), apoio.meta_de(amostra(), HOJE)
+        )
+        self.assertTrue(any("não é do dia" in a for a in outro_dia.avisos))
+
+    def test_gravar_preenche_catalogo_reescrito_e_gravado(self):
+        apuracao = coletor.apurar(amostra(), HOJE, apoio.meta_de(amostra(), HOJE))
+        snapshot = coletor.gravar(apuracao, self.caminhos)
+        self.assertTrue(snapshot["catalogo_reescrito"])
+        self.assertTrue(snapshot["gravado"])
+        self.assertNotIn("bruto.zip", _arquivos_em(self.dir))
+        with open(self.caminhos.ultimo, encoding="utf-8") as f:
+            chaves = list(json.load(f))
+        # A ordem das chaves no arquivo é a de sempre: o diff diário do git
+        # depende dela.
+        self.assertEqual(
+            chaves[-3:], ["catalogo_reescrito", "atributos_publicaveis", "orgaos"]
+        )
+
+    def _zip_em_disco(self, dados, nome="bruto.zip"):
+        caminho = os.path.join(self.caminhos.raiz, nome)
+        with open(caminho, "wb") as f:
+            f.write(_zip_de(json.dumps(dados).encode("utf-8")))
+        return caminho
+
+    def test_de_arquivo_apura_sem_tocar_a_rede(self):
+        # proibir_rede() já faz urlopen levantar; aqui nem o patch local de
+        # _coletar entra.
+        caminho = self._zip_em_disco(amostra())
+        with mock.patch("sys.stderr", new_callable=io.StringIO):
+            snapshot = coletor.coletar(self.caminhos, referencia=HOJE, origem=caminho)
+        self.assertIsNone(snapshot["http"]["status"])
+        self.assertEqual(snapshot["http"]["origem"], "bruto.zip")
+        self.assertEqual(
+            snapshot["http"]["arquivo_interno"], "ATRIBUTOS_POR_NCM_2026_08_22.json"
+        )
+        self.assertTrue(snapshot["http"]["arquivo_do_dia"])
+        self.assertEqual(
+            _arquivos_em(self.dir),
+            [
+                "atributos.json",
+                "bruto.zip",
+                "completo.json",
+                "historico/2026-08-22.json",
+                "ultimo.json",
+            ],
+        )
+        # O snapshot de um ZIP do disco conta como base rolante do seguinte.
+        segundo, _ = self._coletar(amostra())
+        self.assertTrue(segundo["conteudo_identico"])
+
+    def test_main_aceita_os_argumentos_da_linha_de_comando(self):
+        caminho = self._zip_em_disco(amostra())
+        with (
+            mock.patch("sys.stdout", new_callable=io.StringIO) as out,
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+        ):
+            codigo = coletor.main(
+                ["--de-arquivo", caminho, "--dados", self.dir, "--referencia", "2026-08-23"]
+            )
+        self.assertEqual(codigo, 0)
+        self.assertIn("historico/2026-08-23.json", _arquivos_em(self.dir))
+        self.assertIn("viradas agendadas", out.getvalue())
+
+    def test_main_recusa_referencia_fora_do_formato(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            with self.assertRaises(SystemExit):
+                coletor.main(["--referencia", "23/08/2026"])
+        self.assertIn("AAAA-MM-DD", err.getvalue())
+
+    def test_main_avisa_zip_inexistente(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            codigo = coletor.main(["--de-arquivo", os.path.join(self.dir, "nao.zip")])
+        self.assertEqual(codigo, 1)
+        self.assertIn("não existe", err.getvalue())
+
+    def test_aceitar_queda_por_argumento(self):
+        self._coletar(amostra())
+        caminho = self._zip_em_disco(self._amostra_encolhida(), "menor.zip")
+        with (
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            codigo = coletor.main(
+                ["--de-arquivo", caminho, "--dados", self.dir, "--aceitar-queda"]
+            )
+        self.assertEqual(codigo, 0)
+        self.assertIn("::warning::queda aceita", err.getvalue())
+        with open(self.caminhos.ultimo, encoding="utf-8") as f:
+            self.assertTrue(json.load(f)["portao_ignorado"])
 
     def test_main_nao_avisa_quando_as_datas_ja_passaram(self):
         # Depois de um corte a lista esvazia legitimamente: todo dia sem lote

@@ -17,8 +17,14 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import apoio  # noqa: E402
 import coletor  # noqa: E402
 import indexnow  # noqa: E402
+
+
+def setUpModule():
+    apoio.proibir_rede()
+
 
 CFG = {"base_url": "https://exemplo.test", "base_path": "/repo", "indexnow_key": "abc123"}
 URLS = ["https://exemplo.test/repo/", "https://exemplo.test/repo/ncm/8415.10.90/"]

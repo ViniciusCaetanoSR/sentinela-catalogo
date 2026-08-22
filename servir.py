@@ -13,20 +13,17 @@ Pages faz. Sem dependências, só para preview.
 
 import argparse
 import http.server
-import json
 import os
 
-RAIZ = os.path.dirname(os.path.abspath(__file__))
-DIR_SITE = os.path.join(RAIZ, "site")
-ARQ_CONFIG = os.path.join(RAIZ, "config.json")
+import comum
+
+CAMINHOS = comum.padrao()
+DIR_SITE = CAMINHOS.site
 
 
 def base_path():
     """O mesmo prefixo que o gerador usa; vazio quando há domínio próprio."""
-    if not os.path.exists(ARQ_CONFIG):
-        return ""
-    with open(ARQ_CONFIG, encoding="utf-8") as f:
-        return json.load(f).get("base_path", "").rstrip("/")
+    return comum.prefixo(comum.carregar_config(CAMINHOS.config))
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):

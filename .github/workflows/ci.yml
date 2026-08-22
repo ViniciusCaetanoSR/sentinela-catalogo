@@ -33,7 +33,7 @@ jobs:
       # Sem pip: o runtime é só a biblioteca padrão, e o teste tem de provar
       # isso. compileall pega o SyntaxError que a suíte não importaria.
       - name: Compilar os scripts
-        run: python -m compileall -q coletor.py gerar_site.py indexnow.py servir.py
+        run: python -m compileall -q comum.py coletor.py gerar_site.py indexnow.py servir.py
       - name: Rodar a suíte (sem rede)
         run: python -m unittest discover -s tests -v
 
@@ -57,7 +57,8 @@ jobs:
       # Um portão aqui travaria justamente a correção que sobe a cobertura.
       - name: Cobertura
         run: |
-          python -m coverage run --branch --include=coletor.py,gerar_site.py,indexnow.py \
+          python -m coverage run --branch \
+            --include=comum.py,coletor.py,gerar_site.py,indexnow.py \
             -m unittest discover -s tests
           {
             echo "## Cobertura"

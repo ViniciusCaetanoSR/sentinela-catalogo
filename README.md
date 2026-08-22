@@ -20,7 +20,9 @@ O corte é `>=`, não `>`: no dia exato da virada o vínculo tem de continuar ap
 ## Como roda
 
 ```
-coletor.py      baixa o ZIP oficial e apura
+comum.py        o que os scripts dividem: caminhos, escrita atômica, config.json
+
+coletor.py      baixa o ZIP oficial e apura (ou lê um ZIP do disco: --de-arquivo)
                 lê     dados/ultimo.json              (base rolante do portão)
                 grava  dados/bruto.zip                o ZIP como veio (NÃO versionado)
                        dados/ultimo.json              snapshot do dia
@@ -48,7 +50,7 @@ Quatro workflows no GitHub Actions:
 |---|---|---|
 | **CI** (`ci.yml`) | todo push e pull request | `compileall` + suíte em Python 3.9 e 3.12; job de lint com `ruff` e cobertura (o único lugar com `pip`) |
 | **Coletar e publicar** (`coletar.yml`) | 06:00 BRT, resgate às 10:00 BRT, manual | testes → coleta → commit de `dados/` → release do bruto → render → commit do `lastmod` → Pages → IndexNow; abre/fecha issue `coleta-falhou` |
-| **Renderizar** (`render.yml`) | push em `main` que toca `templates/`, `fontes/`, `gerar_site.py`, `config.json`; manual | render e deploy **sem coleta**, a partir do `completo.json` guardado em cache |
+| **Renderizar** (`render.yml`) | push em `main` que toca `templates/`, `fontes/`, `gerar_site.py`, `config.json`; manual | render e deploy **sem coleta**, a partir do `completo.json` em cache — ou reapurado do ZIP da última release |
 | **Vigia** (`vigia.yml`) | 12:00 BRT | homem morto: se o snapshot tem mais de dois dias, abre issue `vigia` |
 
 Sem servidor, sem banco, sem dependências: **só a biblioteca padrão do Python**, 3.9+ (o piso é o `zoneinfo`).
@@ -57,10 +59,25 @@ Sem servidor, sem banco, sem dependências: **só a biblioteca padrão do Python
 
 ```bash
 python coletor.py                         # baixa o ZIP oficial e apura (bate na Receita)
+python coletor.py --de-arquivo bruto.zip  # apura um ZIP já baixado — sem rede
 python gerar_site.py                      # gera site/ a partir de dados/ — sem rede
 python servir.py                          # http://localhost:8000/sentinela-catalogo/
-python -m unittest discover -s tests -v   # ~200 testes em cerca de 1 s, sem rede
+python -m unittest discover -s tests -v   # ~230 testes em cerca de 2 s, sem rede
 ```
+
+Os dois scripts principais aceitam argumentos para não tocar no `dados/` e no `site/` do repositório:
+
+| script | argumento | o que faz |
+|---|---|---|
+| `coletor.py` | `--de-arquivo ZIP` | apura o ZIP do disco em vez de baixar (o asset de uma release `bruto-*`, ou o `dados/bruto.zip` da última coleta) |
+| | `--dados DIR` | grava em `DIR` em vez de `dados/` |
+| | `--referencia AAAA-MM-DD` | fixa o "hoje" da regra; padrão é hoje em Brasília |
+| | `--aceitar-queda` | a válvula do portão, igual a `SENTINELA_ACEITAR_QUEDA=1` |
+| `gerar_site.py` | `--raiz DIR` | outro repositório (`dados/`, `templates/`, `fontes/`, `config.json` de lá) |
+| | `--saida DIR` | grava o site em `DIR` em vez de `site/` |
+| | `--base-path /x` | sobrescreve o `base_path` do `config.json` (vazio para servir na raiz) |
+
+Para ter um `dados/completo.json` local sem bater na Receita: `python coletor.py --de-arquivo <zip da release bruto-*>` e depois `git checkout -- dados` (só o `completo.json` e o `bruto.zip`, que o git ignora, ficam).
 
 `servir.py` existe porque o site é gerado para viver sob o `base_path` (`/sentinela-catalogo/`): abrir `site/index.html` direto no navegador quebra todo link interno. O script tira o prefixo do caminho e serve `404.html` para o que não existe — o mesmo que o Pages faz.
 
@@ -76,10 +93,11 @@ python -m ruff format --check .
 
 ## Arquitetura
 
-Dois scripts de verdade e dois auxiliares, nenhuma abstração entre eles além de arquivos JSON:
+Dois scripts de verdade, dois auxiliares e um módulo comum; entre os scripts, nenhuma abstração além de arquivos JSON:
 
-- **`coletor.py`** é o único que toca a rede. Baixa, descompacta, valida a forma, passa pelo portão de sanidade e só então grava — de forma atômica (`.tmp` + `os.replace`), para nunca deixar um JSON pela metade em `dados/`.
-- **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato.
+- **`comum.py`** é o que eles dividem: `Caminhos` (todo arquivo e pasta, derivados de uma raiz — é o que deixa os testes apontarem tudo para um diretório temporário), a escrita atômica (`.tmp` + `os.replace`, para nunca deixar um JSON pela metade em `dados/`), o único leitor de `config.json` e as funções de URL. Não toca a rede nem conhece o formato do catálogo.
+- **`coletor.py`** é o único que toca a rede. `apurar()` é pura — do JSON carregado ao que será gravado, com a validação de forma e o portão de sanidade no meio — e `gravar()` escreve; `coletar()` liga as duas, baixando ou lendo um ZIP do disco (`--de-arquivo`).
+- **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. O estado de uma geração vive num `Build` passado explicitamente a cada função. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato.
 - **`indexnow.py`** e **`servir.py`** são invólucros finos. O primeiro avisa os buscadores das URLs em `mudancas.txt`; o segundo é preview.
 - **`dados/`** é o estado. Versionado em `main` por enquanto, escrito só pelo bot (ver [CONTRIBUTING.md](CONTRIBUTING.md) sobre por que nunca entra em branch de feature). `completo.json` e `bruto.zip` ficam de fora por tamanho e churn.
 
@@ -124,7 +142,7 @@ Se a coleta das 06:00 falhou e a de resgate das 10:00 passou, a issue `coleta-fa
 
 Trocar um CSS, um template ou o `config.json` não pede dado novo — pede um site novo. O workflow **Renderizar** dispara sozinho em push em `main` que toque `templates/`, `fontes/`, `gerar_site.py` ou `config.json` (e manualmente, pelo *Run workflow*), restaura o `completo.json` da última coleta do cache do Actions, roda o gerador e publica. A Receita não é consultada.
 
-Se o cache não existir (repositório novo, ou cache expirado por inatividade de uma semana), o job falha com a mensagem "sem `completo.json` em cache; rode o workflow Coletar". Uma coleta regrava o cache.
+Se o cache não existir (repositório novo, ou cache expirado por inatividade de uma semana), o job baixa o ZIP da última release `bruto-*` e reapura com `python coletor.py --de-arquivo`, sem tocar a Receita; o `completo.json` sai disso e o resto de `dados/` é restaurado do git. Só quando também não há release o job falha, com a mensagem "rode o workflow Coletar". Uma coleta regrava o cache e, quando o conteúdo muda, a release.
 
 ## Armadilhas do endpoint
 

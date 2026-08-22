@@ -18,8 +18,16 @@ Saida em site/:
 
 Também grava dados/lastmod.json: o hash do conteúdo de cada página e a data
 em que ele mudou pela última vez, que alimenta o lastmod do sitemap.
+
+Uso:
+    python gerar_site.py                       dados/ e site/ ao lado do script
+    python gerar_site.py --raiz DIR            outro repositório (dados, templates...)
+    python gerar_site.py --saida DIR           grava o site em DIR
+    python gerar_site.py --base-path /x        sobrescreve o base_path do config
 """
 
+import argparse
+import dataclasses
 import functools
 import hashlib
 import json
@@ -33,16 +41,8 @@ import zlib
 from datetime import date, datetime, timedelta, timezone
 from email.utils import formatdate
 
-RAIZ = os.path.dirname(os.path.abspath(__file__))
-DIR_TEMPLATES = os.path.join(RAIZ, "templates")
-DIR_SITE = os.path.join(RAIZ, "site")
-DIR_HISTORICO = os.path.join(RAIZ, "dados", "historico")
-ARQ_ULTIMO = os.path.join(RAIZ, "dados", "ultimo.json")
-ARQ_CONFIG = os.path.join(RAIZ, "config.json")
-ARQ_ATRIBUTOS = os.path.join(RAIZ, "dados", "atributos.json")
-ARQ_COMPLETO = os.path.join(RAIZ, "dados", "completo.json")
-ARQ_LASTMOD = os.path.join(RAIZ, "dados", "lastmod.json")
-DIR_FONTES = os.path.join(RAIZ, "fontes")
+import comum
+from comum import absoluta, prefixo, url
 
 MESES = (
     "",
@@ -87,20 +87,30 @@ JANELA_HISTORICO = timedelta(days=30)
 SCHEMA_SUPORTADO = 1
 
 
-def config():
-    padrao = {
-        "base_url": "",
-        "base_path": "",
-        "form_embed_url": "",
-        "contato_email": "",
-        "goatcounter_code": "",
-        "dominio": "",
-        "indexnow_key": "",
-    }
-    if os.path.exists(ARQ_CONFIG):
-        with open(ARQ_CONFIG, encoding="utf-8") as f:
-            padrao.update(json.load(f))
-    return padrao
+@dataclasses.dataclass
+class Build:
+    """Tudo o que uma geração precisa, passado explicitamente.
+
+    Antes eram sete constantes de módulo e dois dicionários globais
+    (PAGINAS, ESTATICOS) que os testes remendavam em três lugares. Aqui o
+    estado da geração é um objeto só: os três arquivos de dados já lidos,
+    a config, os caminhos, e o que vai sendo acumulado pelo caminho - o
+    hash de cada página (para o lastmod) e o nome dos estáticos com hash.
+    """
+
+    cfg: dict
+    caminhos: comum.Caminhos
+    snapshot: dict
+    catalogo: dict
+    completo: dict
+    # caminho publicado -> hash do conteúdo. Alimenta o lastmod do sitemap.
+    paginas: dict = dataclasses.field(default_factory=dict)
+    # "css"/"js" -> caminho com hash de conteúdo, preenchido por gerar_estaticos.
+    estaticos: dict = dataclasses.field(default_factory=dict)
+    # Toda NCM do mapa completo ganha página; decide link ou texto.
+    ncms_com_pagina: set = dataclasses.field(default_factory=set)
+    # Atributos com página própria; decide link ou texto.
+    com_pagina: set = dataclasses.field(default_factory=set)
 
 
 def esc(texto):
@@ -121,31 +131,39 @@ def esc(texto):
     )
 
 
-def prefixo(cfg):
-    """Em Pages de repositório de projeto o site vive sob /<repo>/."""
-    return cfg.get("base_path", "").rstrip("/")
+def link_ncm(build, ncm, texto=None):
+    """<a> para a página da NCM. O texto padrão é o próprio código."""
+    return f'<a href="{esc(url(build.cfg, f"/ncm/{ncm}/"))}">{esc(texto or ncm)}</a>'
 
 
-def url(cfg, caminho):
-    """Link interno, já com o prefixo do base_path.
+def link_atributo(build, codigo, texto):
+    """<a> para a página do atributo. Só para códigos em build.com_pagina -
+    quem chama já decidiu isso; aqui não há como saber."""
+    return f'<a href="{esc(url(build.cfg, f"/atributos/{codigo}/"))}">{esc(texto)}</a>'
 
-    Substitui a cirurgia de string que rodava sobre o HTML pronto
-    (html.replace('href="/', ...)). Aquela versão só pegava aspas duplas, e
-    por isso 17 links escritos com aspas simples saíam sem prefixo e davam
-    404 - justamente nas dez páginas de atributo com virada agendada.
+
+def link_orgao(build, slug, texto):
+    """<a> para a página do órgão anuente."""
+    return f'<a href="{esc(url(build.cfg, f"/orgaos/{slug}/"))}">{esc(texto)}</a>'
+
+
+def lista_orgaos(build):
+    """Os <li> do índice de órgãos, com a contagem de atributos de cada um.
+
+    Aparece no índice de atributos e no de órgãos; era construído duas vezes
+    com o mesmo código.
     """
-    return prefixo(cfg) + caminho
-
-
-def absoluta(cfg, caminho):
-    """URL completa, para canonical, og:url, sitemap e feed."""
-    base = cfg.get("base_url", "").rstrip("/")
-    return base + prefixo(cfg) + caminho
+    partes = []
+    for o in build.catalogo["orgaos"]:
+        texto = f"{o['orgao']} · {o['total_atributos']}"
+        partes.append(f"<li>{link_orgao(build, o['slug'], texto)}</li>")
+    return "".join(partes)
 
 
 @functools.cache
-def template(nome):
-    with open(os.path.join(DIR_TEMPLATES, nome), encoding="utf-8") as f:
+def template(diretorio, nome):
+    """Lido uma vez por geração: são 11 mil páginas sobre os mesmos moldes."""
+    with open(os.path.join(diretorio, nome), encoding="utf-8") as f:
         return f.read()
 
 
@@ -222,11 +240,7 @@ def capitulo(ncm):
     return so_digitos[:2] or "00"
 
 
-# caminho publicado -> hash do conteúdo. Alimenta o lastmod do sitemap.
-PAGINAS = {}
-
-
-def escrever(caminho_relativo, html, assinatura=None):
+def escrever(build, caminho_relativo, html, assinatura=None):
     """Grava a página e registra o hash do conteúdo que importa.
 
     A assinatura é calculada por quem chama, a partir dos DADOS da página
@@ -234,13 +248,14 @@ def escrever(caminho_relativo, html, assinatura=None):
     todo dia por causa do rodapé com a data da coleta, e o lastmod voltaria
     a ser a mentira que era.
     """
-    destino = os.path.join(DIR_SITE, caminho_relativo)
+    destino = os.path.join(build.caminhos.site, caminho_relativo)
     os.makedirs(os.path.dirname(destino), exist_ok=True)
     with open(destino, "w", encoding="utf-8", newline="\n") as f:
         f.write(html)
     caminho = "/" + caminho_relativo.replace("\\", "/").replace("index.html", "")
     if assinatura is not None:
-        PAGINAS[caminho] = hashlib.sha256(assinatura.encode("utf-8")).hexdigest()[:12]
+        marca = hashlib.sha256(assinatura.encode("utf-8")).hexdigest()[:12]
+        build.paginas[caminho] = marca
     return caminho
 
 
@@ -388,12 +403,7 @@ def trilha_html(cfg, itens):
     )
 
 
-ESTATICOS = {}
-
-
-def pagina(
-    cfg, snapshot, corpo, titulo, descricao, caminho=None, itens_trilha=None, jsonld=None
-):
+def pagina(build, corpo, titulo, descricao, caminho=None, itens_trilha=None, jsonld=None):
     """Monta a página completa sobre base.html.
 
     caminho=None é a página de erro: ela não tem URL própria (o Pages a serve
@@ -401,6 +411,7 @@ def pagina(
     com noindex - um canonical fixo em /404/ convidaria o Google a indexar
     a página de erro como se fosse conteúdo.
     """
+    cfg, snapshot = build.cfg, build.snapshot
     trilha = trilha_html(cfg, itens_trilha or [])
     estruturado = jsonld
     if estruturado is None and itens_trilha:
@@ -416,7 +427,7 @@ def pagina(
         )
         meta_extra = ""
     return preencher(
-        template("base.html"),
+        template(build.caminhos.templates, "base.html"),
         {
             "titulo": esc(titulo),
             "descricao": esc(descricao),
@@ -425,8 +436,8 @@ def pagina(
             "conteudo": corpo,
             "trilha": trilha,
             "base": esc(prefixo(cfg)),
-            "css": esc(url(cfg, ESTATICOS.get("css", "/estilo.css"))),
-            "js": esc(url(cfg, ESTATICOS.get("js", "/app.js"))),
+            "css": esc(url(cfg, build.estaticos.get("css", "/estilo.css"))),
+            "js": esc(url(cfg, build.estaticos.get("js", "/app.js"))),
             "og_imagem": esc(absoluta(cfg, "/og.png")),
             "coletado_em": br(snapshot["data_referencia"]),
             "versao": esc(snapshot["contagens"]["versao"]),
@@ -445,7 +456,7 @@ def rotulo(texto):
     return f' data-rot="{esc(texto)}"'
 
 
-def tabela_viradas(cfg, viradas, referencia):
+def tabela_viradas(build, viradas, referencia):
     if not viradas:
         # Uma tabela com uma célula solta não é tabela: leitor de tela
         # anunciava "tabela, 1 linha, 1 coluna" para uma frase.
@@ -460,11 +471,9 @@ def tabela_viradas(cfg, viradas, referencia):
         urg = " urgente" if dias <= 7 else ""
         linhas.append(
             f"<tr>"
-            f'<td class="ncm"{rotulo("NCM")}>'
-            f'<a href="{esc(url(cfg, "/ncm/" + v["ncm"] + "/"))}">{esc(v["ncm"])}</a></td>'
+            f'<td class="ncm"{rotulo("NCM")}>{link_ncm(build, v["ncm"])}</td>'
             f"<td{rotulo('Atributo')}>"
-            f'<a href="{esc(url(cfg, "/atributos/" + v["atributo"] + "/"))}">'
-            f"{esc(v['nome'] or v['atributo'])}</a>"
+            f"{link_atributo(build, v['atributo'], v['nome'] or v['atributo'])}"
             f'<br><span class="cod-inline">{esc(v["atributo"])}</span></td>'
             f"<td{rotulo('Órgão')}>{esc('/'.join(v['orgaos']) or '—')}</td>"
             f'<td class="data"{rotulo("Vira obrigatório em")}>'
@@ -485,7 +494,7 @@ def tabela_viradas(cfg, viradas, referencia):
     )
 
 
-def _celula_atributo(cfg, a, com_pagina, detalhes):
+def _celula_atributo(build, a, detalhes):
     """Nome do atributo: link quando existe página, texto quando não existe.
 
     Quem não tem página própria mostra aqui a orientação oficial e as opções
@@ -494,9 +503,8 @@ def _celula_atributo(cfg, a, com_pagina, detalhes):
     """
     codigo = a["codigo"]
     nome = a.get("nome") or codigo
-    if codigo in com_pagina:
-        alvo = esc(url(cfg, f"/atributos/{codigo}/"))
-        return f'<a href="{alvo}">{esc(nome)}</a>'
+    if codigo in build.com_pagina:
+        return link_atributo(build, codigo, nome)
 
     partes = [esc(nome)]
     d = detalhes.get(codigo) or {}
@@ -521,7 +529,7 @@ def _celula_atributo(cfg, a, com_pagina, detalhes):
     return "".join(partes)
 
 
-def tabela_atributos_ncm(cfg, atributos, com_pagina, detalhes):
+def tabela_atributos_ncm(build, atributos, detalhes):
     linhas = []
     for a in atributos:
         if a.get("vira_obrigatorio_em"):
@@ -534,17 +542,15 @@ def tabela_atributos_ncm(cfg, atributos, com_pagina, detalhes):
         else:
             marca = '<span class="tag opc">opcional</span>'
         codigo = a["codigo"]
-        if codigo in com_pagina:
-            cod_html = (
-                f'<a href="{esc(url(cfg, "/atributos/" + codigo + "/"))}">{esc(codigo)}</a>'
-            )
+        if codigo in build.com_pagina:
+            cod_html = link_atributo(build, codigo, codigo)
         else:
             cod_html = f'<span class="sem-pagina">{esc(codigo)}</span>'
         linhas.append(
             f"<tr>"
             f'<td class="cod"{rotulo("Código")}>{cod_html}</td>'
             f"<td{rotulo('Atributo')}>"
-            f"{_celula_atributo(cfg, a, com_pagina, detalhes)}</td>"
+            f"{_celula_atributo(build, a, detalhes)}</td>"
             f"<td{rotulo('Órgão')}>{esc('/'.join(a.get('orgaos') or []) or '—')}</td>"
             f"<td{rotulo('Modalidade')}>{esc(a.get('modalidade') or '—')}</td>"
             f"<td{rotulo('Situação')}>{marca}</td>"
@@ -569,15 +575,11 @@ def _snapshot_historico(caminho):
     sobreviveu por sorte. Arquivo ilegível ou de formato desconhecido é
     ignorado, não derruba o build.
     """
-    try:
-        with open(caminho, encoding="utf-8") as f:
-            s = json.load(f)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(s, dict) or not isinstance(s.get("viradas"), list):
+    snapshot = comum.ler_json_tolerante(caminho)
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("viradas"), list):
         return None
     # Os primeiros snapshots não carregavam "schema": são o formato 1.
-    schema = s.get("schema")
+    schema = snapshot.get("schema")
     if schema is not None and not (isinstance(schema, int) and schema <= SCHEMA_SUPORTADO):
         print(
             f"AVISO: {caminho} tem schema {schema!r}, acima do suportado "
@@ -585,21 +587,21 @@ def _snapshot_historico(caminho):
             file=sys.stderr,
         )
         return None
-    return s
+    return snapshot
 
 
-def arquivos_historico(referencia, janela=None):
+def arquivos_historico(dir_historico, referencia, janela=None):
     """Os snapshots diários até a data de referência: [(data, caminho)].
 
     Com janela, só os dos últimos N dias - e são DIAS, não arquivos: um dia
     perdido por falha de rede alargava silenciosamente o período. Nome que
     não é data (um .json perdido na pasta) é ignorado.
     """
-    if not os.path.isdir(DIR_HISTORICO):
+    if not os.path.isdir(dir_historico):
         return []
     limite = referencia - janela if janela else None
     arquivos = []
-    for nome in sorted(os.listdir(DIR_HISTORICO)):
+    for nome in sorted(os.listdir(dir_historico)):
         if not nome.endswith(".json"):
             continue
         try:
@@ -608,11 +610,11 @@ def arquivos_historico(referencia, janela=None):
             continue
         if quando > referencia or (limite and quando < limite):
             continue
-        arquivos.append((quando, os.path.join(DIR_HISTORICO, nome)))
+        arquivos.append((quando, os.path.join(dir_historico, nome)))
     return arquivos
 
 
-def primeira_vista(referencia):
+def primeira_vista(dir_historico, referencia):
     """Primeira data em que cada virada apareceu no histórico.
 
     Devolve {(ncm, atributo, vira_obrigatorio_em): "AAAA-MM-DD"}. É o pubDate
@@ -624,27 +626,27 @@ def primeira_vista(referencia):
     pubDate de uma virada antiga andaria um dia para a frente a cada build.
     """
     vista = {}
-    for quando, caminho in arquivos_historico(referencia):
-        s = _snapshot_historico(caminho)
-        if not s:
+    for quando, caminho in arquivos_historico(dir_historico, referencia):
+        snapshot = _snapshot_historico(caminho)
+        if not snapshot:
             continue
-        for v in s["viradas"]:
+        for v in snapshot["viradas"]:
             chave = (v.get("ncm"), v.get("atributo"), v.get("vira_obrigatorio_em"))
             if all(chave) and chave not in vista:
                 vista[chave] = quando.isoformat()
     return vista
 
 
-def bloco_historico(cfg, referencia, ncms_com_pagina=frozenset()):
+def bloco_historico(build, referencia):
     """O que mudou nos ultimos 30 dias, montado do arquivo diario.
 
     O endpoint oficial ignora ?data= e não serve versões passadas: sem este
     arquivo local não existe 'o que mudou'. E também o que impede a página de
     ficar vazia entre um lote de viradas e o próximo. As NCMs em
-    ncms_com_pagina viram link; as demais (uma NCM que saiu do Catálogo)
-    ficam como texto, para o site continuar fechado.
+    build.ncms_com_pagina viram link; as demais (uma NCM que saiu do
+    Catálogo) ficam como texto, para o site continuar fechado.
     """
-    arquivos = arquivos_historico(referencia, JANELA_HISTORICO)
+    arquivos = arquivos_historico(build.caminhos.historico, referencia, JANELA_HISTORICO)
     if len(arquivos) < 2:
         return ""
 
@@ -653,10 +655,10 @@ def bloco_historico(cfg, referencia, ncms_com_pagina=frozenset()):
         return ""
     vistos_antes = {}
     for _, caminho in arquivos[:-1]:
-        s = _snapshot_historico(caminho)
-        if not s:
+        antigo = _snapshot_historico(caminho)
+        if not antigo:
             continue
-        for v in s["viradas"]:
+        for v in antigo["viradas"]:
             if v.get("ncm") and v.get("atributo"):
                 vistos_antes[(v["ncm"], v["atributo"])] = v.get("nome")
 
@@ -672,9 +674,8 @@ def bloco_historico(cfg, referencia, ncms_com_pagina=frozenset()):
         return ""
 
     def item(ncm, texto):
-        if ncm in ncms_com_pagina:
-            alvo = esc(url(cfg, f"/ncm/{ncm}/"))
-            return f'<li><a href="{alvo}">{esc(ncm)}</a> — {esc(texto)}</li>'
+        if ncm in build.ncms_com_pagina:
+            return f"<li>{link_ncm(build, ncm)} — {esc(texto)}</li>"
         return f"<li>{esc(ncm)} — {esc(texto)}</li>"
 
     partes = ["<h2>O que mudou nos últimos 30 dias</h2>"]
@@ -703,9 +704,10 @@ def bloco_historico(cfg, referencia, ncms_com_pagina=frozenset()):
 # ---------------------------------------------------------------- páginas
 
 
-def gerar_index(cfg, s, ncms_com_pagina=frozenset()):
-    ref = date.fromisoformat(s["data_referencia"])
-    vs = s["viradas"]
+def gerar_index(build):
+    cfg, snapshot = build.cfg, build.snapshot
+    ref = date.fromisoformat(snapshot["data_referencia"])
+    vs = snapshot["viradas"]
     caminhos = []
 
     if vs:
@@ -771,7 +773,7 @@ def gerar_index(cfg, s, ncms_com_pagina=frozenset()):
             f"{plural(len(vs), 'obrigatório', 'obrigatórios')} no Catálogo de "
             f"Produtos do Portal Único. Próximo corte em {br(proxima)}."
         )
-        cobertura = f"{s['data_referencia']}/{datas[-1]}"
+        cobertura = f"{snapshot['data_referencia']}/{datas[-1]}"
     else:
         h1 = "Nenhum atributo de NCM tem virada agendada hoje"
         lede = (
@@ -790,17 +792,17 @@ def gerar_index(cfg, s, ncms_com_pagina=frozenset()):
             "Monitoramento diário dos atributos de NCM que viram obrigatórios "
             "no Catálogo de Produtos do Portal Único."
         )
-        cobertura = s["data_referencia"]
+        cobertura = snapshot["data_referencia"]
 
-    historico = bloco_historico(cfg, ref, ncms_com_pagina)
+    historico = bloco_historico(build, ref)
     corpo = preencher(
-        template("index.html"),
+        template(build.caminhos.templates, "index.html"),
         {
-            "data_ref": br(s["data_referencia"]),
+            "data_ref": br(snapshot["data_referencia"]),
             "h1": esc(h1),
             "lede": esc(lede),
             "cartao": cartao,
-            "tabela": tabela_viradas(cfg, vs, ref),
+            "tabela": tabela_viradas(build, vs, ref),
             "historico": historico,
             "base": esc(prefixo(cfg)),
         },
@@ -824,8 +826,8 @@ def gerar_index(cfg, s, ncms_com_pagina=frozenset()):
         "isAccessibleForFree": True,
         "license": "https://creativecommons.org/publicdomain/zero/1.0/",
         "creativeWorkStatus": "Published",
-        "dateModified": s["data_referencia"],
-        "isBasedOn": s.get("fonte"),
+        "dateModified": snapshot["data_referencia"],
+        "isBasedOn": snapshot.get("fonte"),
         "keywords": [
             "NCM",
             "Portal Único",
@@ -854,8 +856,9 @@ def gerar_index(cfg, s, ncms_com_pagina=frozenset()):
     # deslizando é mudança de conteúdo de verdade.
     caminhos.append(
         escrever(
+            build,
             "index.html",
-            pagina(cfg, s, corpo, titulo, descricao, "/", jsonld=dataset),
+            pagina(build, corpo, titulo, descricao, "/", jsonld=dataset),
             assinatura=assinatura_dados(
                 titulo,
                 descricao,
@@ -869,18 +872,19 @@ def gerar_index(cfg, s, ncms_com_pagina=frozenset()):
     return caminhos
 
 
-def gerar_ncms(cfg, s, completo, com_pagina):
+def gerar_ncms(build):
     """Uma página por NCM do Catálogo, não só pelas que têm virada.
 
     Antes eram 9 páginas de NCM, de 10.571 existentes. A pergunta que o
     público faz é "a MINHA NCM exige o quê?" - e ninguém pesquisa por
     ATT_13240. Este é o eixo que responde.
     """
-    ref = date.fromisoformat(s["data_referencia"])
+    snapshot, completo, com_pagina = build.snapshot, build.completo, build.com_pagina
+    ref = date.fromisoformat(snapshot["data_referencia"])
     por_ncm = {}
-    for v in s["viradas"]:
+    for v in snapshot["viradas"]:
         por_ncm.setdefault(v["ncm"], []).append(v)
-    fichas = {f["ncm"]: f for f in s.get("ncms_afetadas", [])}
+    fichas = {f["ncm"]: f for f in snapshot.get("ncms_afetadas", [])}
     detalhes = completo.get("atributos", {})
     caminhos = []
 
@@ -958,13 +962,13 @@ def gerar_ncms(cfg, s, completo, com_pagina):
                 f"esta NCM."
             )
             corpo = preencher(
-                template("ncm.html"),
+                template(build.caminhos.templates, "ncm.html"),
                 {
                     "ncm": esc(ncm),
                     "h1": esc(h1),
                     "lede": esc(lede),
                     "aviso": aviso,
-                    "tabela": tabela_atributos_ncm(cfg, atributos, com_pagina, detalhes),
+                    "tabela": tabela_atributos_ncm(build, atributos, detalhes),
                 },
             )
         else:
@@ -990,13 +994,13 @@ def gerar_ncms(cfg, s, completo, com_pagina):
                 f"opções válidas e situação de cada um."
             )
             corpo = preencher(
-                template("ncm_simples.html"),
+                template(build.caminhos.templates, "ncm_simples.html"),
                 {
                     "ncm": esc(ncm),
                     "h1": esc(h1),
                     "lede": esc(lede),
                     "aviso": aviso,
-                    "tabela": tabela_atributos_ncm(cfg, atributos, com_pagina, detalhes),
+                    "tabela": tabela_atributos_ncm(build, atributos, detalhes),
                 },
             )
 
@@ -1023,21 +1027,27 @@ def gerar_ncms(cfg, s, completo, com_pagina):
         }
         caminhos.append(
             escrever(
+                build,
                 f"ncm/{ncm}/index.html",
-                pagina(cfg, s, corpo, titulo, descricao, f"/ncm/{ncm}/", itens_trilha),
+                pagina(build, corpo, titulo, descricao, f"/ncm/{ncm}/", itens_trilha),
                 assinatura=assinatura_dados(titulo, descricao, dados_pagina),
             )
         )
 
-    caminhos += gerar_capitulos(cfg, s, completo, por_ncm)
+    caminhos += gerar_capitulos(build, por_ncm)
     return caminhos
 
 
-def gerar_capitulos(cfg, s, completo, por_ncm):
-    """Índice por capítulo NCM: o caminho de rastreio até as 10 mil páginas."""
+def gerar_capitulos(build, por_ncm):
+    """Índice por capítulo NCM: o caminho de rastreio até as 10 mil páginas.
+
+    por_ncm é {ncm: [viradas]}, já montado por gerar_ncms: marca quem tem
+    virada na lista.
+    """
+    cfg = build.cfg
     caminhos = []
     por_capitulo = {}
-    for ncm in sorted(completo.get("ncms", {})):
+    for ncm in sorted(build.completo.get("ncms", {})):
         por_capitulo.setdefault(capitulo(ncm), []).append(ncm)
 
     for cap, ncms in sorted(por_capitulo.items()):
@@ -1046,7 +1056,7 @@ def gerar_capitulos(cfg, s, completo, por_ncm):
             sufixo = "" if numero == 1 else f"pagina-{numero}/"
             caminho = f"/ncm/capitulo-{cap}/{sufixo}"
             itens = "".join(
-                f'<li><a href="{esc(url(cfg, "/ncm/" + n + "/"))}">{esc(n)}</a>'
+                f"<li>{link_ncm(build, n)}"
                 + (' <span class="tag muda">virada</span>' if n in por_ncm else "")
                 + "</li>"
                 for n in bloco
@@ -1095,10 +1105,10 @@ def gerar_capitulos(cfg, s, completo, por_ncm):
             )
             caminhos.append(
                 escrever(
+                    build,
                     f"ncm/capitulo-{cap}/{sufixo}index.html",
                     pagina(
-                        cfg,
-                        s,
+                        build,
                         corpo,
                         titulo,
                         descricao,
@@ -1142,10 +1152,10 @@ def gerar_capitulos(cfg, s, completo, por_ncm):
     )
     caminhos.append(
         escrever(
+            build,
             "ncm/index.html",
             pagina(
-                cfg,
-                s,
+                build,
                 corpo,
                 titulo,
                 descricao,
@@ -1181,21 +1191,22 @@ def titulo_atributo(a):
     return " — ".join(partes) + " — Portal Único"
 
 
-def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
+def gerar_atributos(build):
     """Uma página por atributo do catálogo (os que merecem página).
 
-    ncms_com_pagina decide se uma NCM citada vira link ou texto: o site só
-    fecha porque nenhum link é emitido sem a página correspondente.
+    build.ncms_com_pagina decide se uma NCM citada vira link ou texto: o
+    site só fecha porque nenhum link é emitido sem a página correspondente.
     """
+    catalogo = build.catalogo
     caminhos = []
     virando = {}
-    for v in s["viradas"]:
+    for v in build.snapshot["viradas"]:
         virando.setdefault(v["atributo"], []).append(v)
     slug_por_orgao = {o["orgao"]: o["slug"] for o in catalogo["orgaos"]}
 
     def chip_ncm(n):
-        if n in ncms_com_pagina:
-            return f'<li><a href="{esc(url(cfg, "/ncm/" + n + "/"))}">{esc(n)}</a></li>'
+        if n in build.ncms_com_pagina:
+            return f"<li>{link_ncm(build, n)}</li>"
         return f'<li><span class="sem-pagina">{esc(n)}</span></li>'
 
     # Vizinhança: quem divide NCM com quem. Transforma a topologia em estrela
@@ -1240,8 +1251,8 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
                 f"o que preencher e opções válidas." + onde
             )
 
-        lista_orgaos = a.get("orgaos") or []
-        orgaos_txt = "/".join(lista_orgaos) or "—"
+        orgaos_do_atributo = a.get("orgaos") or []
+        orgaos_txt = "/".join(orgaos_do_atributo) or "—"
         forma = FORMA_PREENCHIMENTO.get(
             a.get("forma_preenchimento"), a.get("forma_preenchimento") or "—"
         )
@@ -1295,11 +1306,10 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
             )
         chips = "".join(chip_ncm(n) for n in mostradas)
 
-        if lista_orgaos:
+        if orgaos_do_atributo:
             links = " · ".join(
-                f'<a href="{esc(url(cfg, "/orgaos/" + slug_por_orgao[o] + "/"))}">'
-                f"{esc(o)}</a>"
-                for o in lista_orgaos
+                link_orgao(build, slug_por_orgao[o], o)
+                for o in orgaos_do_atributo
                 if o in slug_por_orgao
             )
             if links:
@@ -1318,9 +1328,8 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
         relacionados = ""
         if vizinhos:
             itens = "".join(
-                f'<li><a href="{esc(url(cfg, "/atributos/" + v + "/"))}">'
-                f"{esc(nomes[v])}</a></li>"
-                for v in vizinhos[:10]
+                f"<li>{link_atributo(build, vizinho, nomes[vizinho])}</li>"
+                for vizinho in vizinhos[:10]
             )
             relacionados = (
                 f"<h2>Atributos que costumam vir junto</h2>"
@@ -1329,7 +1338,7 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
             )
 
         corpo = preencher(
-            template("atributo.html"),
+            template(build.caminhos.templates, "atributo.html"),
             {
                 "codigo": esc(cod),
                 "h1": esc(h1),
@@ -1346,10 +1355,10 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
         titulo = titulo_atributo(a)
         caminhos.append(
             escrever(
+                build,
                 f"atributos/{cod}/index.html",
                 pagina(
-                    cfg,
-                    s,
+                    build,
                     corpo,
                     titulo,
                     descricao,
@@ -1366,25 +1375,26 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
                     {
                         "atributo": a,
                         "viradas": [virada_estavel(v) for v in vs],
-                        "vizinhos": [[v, nomes[v]] for v in vizinhos[:10]],
-                        "orgaos_com_pagina": [
-                            o for o in lista_orgaos if o in slug_por_orgao
+                        "vizinhos": [
+                            [vizinho, nomes[vizinho]] for vizinho in vizinhos[:10]
                         ],
-                        "ncms_com_pagina": [n for n in mostradas if n in ncms_com_pagina],
+                        "orgaos_com_pagina": [
+                            o for o in orgaos_do_atributo if o in slug_por_orgao
+                        ],
+                        "ncms_com_pagina": [
+                            n for n in mostradas if n in build.ncms_com_pagina
+                        ],
                     },
                 ),
             )
         )
 
-    orgs = "".join(
-        f'<li><a href="{esc(url(cfg, "/orgaos/" + o["slug"] + "/"))}">'
-        f"{esc(o['orgao'])} · {o['total_atributos']}</a></li>"
-        for o in catalogo["orgaos"]
-    )
+    orgs = lista_orgaos(build)
     destaque = [a for a in catalogo["atributos"] if a.get("nas_viradas")]
     itens = "".join(
-        f'<li><a href="{esc(url(cfg, "/atributos/" + a["codigo"] + "/"))}">'
-        f"{esc(a['codigo'])} · {esc(a.get('nome') or '')}</a></li>"
+        "<li>"
+        + link_atributo(build, a["codigo"], f"{a['codigo']} · {a.get('nome') or ''}")
+        + "</li>"
         for a in destaque
     )
     corpo = (
@@ -1404,10 +1414,10 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
     )
     caminhos.append(
         escrever(
+            build,
             "atributos/index.html",
             pagina(
-                cfg,
-                s,
+                build,
                 corpo,
                 titulo,
                 descricao,
@@ -1431,12 +1441,13 @@ def gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina=frozenset()):
     return caminhos
 
 
-def gerar_orgaos(cfg, s, catalogo):
+def gerar_orgaos(build):
     """Uma página por órgão anuente.
 
     Cria um eixo de consulta novo ("atributos anvisa duimp") e resolve o
     problema de um indice único com mais de mil itens.
     """
+    catalogo = build.catalogo
     caminhos = []
     virando = {a["codigo"] for a in catalogo["atributos"] if a.get("nas_viradas")}
 
@@ -1451,12 +1462,11 @@ def gerar_orgaos(cfg, s, catalogo):
             forma = FORMA_PREENCHIMENTO.get(
                 a.get("forma_preenchimento"), a.get("forma_preenchimento") or "—"
             )
-            alvo = esc(url(cfg, f"/atributos/{a['codigo']}/"))
             # Sem marca, a célula sai sem rótulo: no cartão mobile um
             # "SITUAÇÃO" seguido de nada era uma pergunta sem resposta.
             linhas.append(
                 f'<tr><td class="cod"{rotulo("Código")}>'
-                f'<a href="{alvo}">{esc(a["codigo"])}</a></td>'
+                f"{link_atributo(build, a['codigo'], a['codigo'])}</td>"
                 f"<td{rotulo('Atributo')}>{esc(a.get('nome') or '—')}</td>"
                 f"<td{rotulo('Preenchimento')}>{esc(forma)}</td>"
                 f'<td class="num"{rotulo("NCMs")}>{milhar(a.get("total_ncms", 0))}</td>'
@@ -1485,8 +1495,9 @@ def gerar_orgaos(cfg, s, catalogo):
         aviso = ""
         if com_virada:
             itens = "".join(
-                f'<li><a href="{esc(url(cfg, "/atributos/" + a["codigo"] + "/"))}">'
-                f"{esc(a.get('nome') or a['codigo'])}</a></li>"
+                "<li>"
+                + link_atributo(build, a["codigo"], a.get("nome") or a["codigo"])
+                + "</li>"
                 for a in com_virada
             )
             quantos = plural(
@@ -1499,7 +1510,7 @@ def gerar_orgaos(cfg, s, catalogo):
             )
 
         corpo = preencher(
-            template("orgao.html"),
+            template(build.caminhos.templates, "orgao.html"),
             {
                 "h1": esc(h1),
                 "lede": esc(lede),
@@ -1515,10 +1526,10 @@ def gerar_orgaos(cfg, s, catalogo):
         )
         caminhos.append(
             escrever(
+                build,
                 f"orgaos/{o['slug']}/index.html",
                 pagina(
-                    cfg,
-                    s,
+                    build,
                     corpo,
                     titulo,
                     descricao,
@@ -1540,11 +1551,7 @@ def gerar_orgaos(cfg, s, catalogo):
             )
         )
 
-    itens = "".join(
-        f'<li><a href="{esc(url(cfg, "/orgaos/" + o["slug"] + "/"))}">'
-        f"{esc(o['orgao'])} · {o['total_atributos']}</a></li>"
-        for o in catalogo["orgaos"]
-    )
+    itens = lista_orgaos(build)
     corpo = (
         f'<span class="chapeu">Índice</span>'
         f"<h1>Órgãos anuentes do Catálogo de Produtos</h1>"
@@ -1559,10 +1566,10 @@ def gerar_orgaos(cfg, s, catalogo):
     )
     caminhos.append(
         escrever(
+            build,
             "orgaos/index.html",
             pagina(
-                cfg,
-                s,
+                build,
                 corpo,
                 titulo,
                 descricao,
@@ -1584,14 +1591,14 @@ def gerar_orgaos(cfg, s, catalogo):
     return caminhos
 
 
-def gerar_privacidade(cfg, s):
+def gerar_privacidade(build):
     """Página de privacidade.
 
     O site não coleta nada no servidor (o mailto abre o cliente do visitante),
     mas roda analítica - e para um público de compliance a ausência da página
     custa mais credibilidade do que o esforco de escreve-la.
     """
-    corpo = template("privacidade.html")
+    corpo = template(build.caminhos.templates, "privacidade.html")
     titulo = "Privacidade — Sentinela do Catálogo"
     descricao = (
         "O que este site coleta: nada no servidor, analítica sem cookie, e o "
@@ -1599,10 +1606,10 @@ def gerar_privacidade(cfg, s):
     )
     return [
         escrever(
+            build,
             "privacidade/index.html",
             pagina(
-                cfg,
-                s,
+                build,
                 corpo,
                 titulo,
                 descricao,
@@ -1614,18 +1621,21 @@ def gerar_privacidade(cfg, s):
     ]
 
 
-def gerar_404(cfg, s):
+def gerar_404(build):
     """O Pages serve 404.html da raiz publicada para qualquer caminho ausente.
 
     Fica FORA do sitemap e sai com noindex e sem canonical (caminho=None):
     é página de erro, não de conteúdo.
     """
-    corpo = preencher(template("404.html"), {"base": esc(prefixo(cfg))})
+    corpo = preencher(
+        template(build.caminhos.templates, "404.html"),
+        {"base": esc(prefixo(build.cfg))},
+    )
     escrever(
+        build,
         "404.html",
         pagina(
-            cfg,
-            s,
+            build,
             corpo,
             "Página não encontrada — Sentinela do Catálogo",
             "A página que você procurava não existe ou saiu da lista.",
@@ -1681,23 +1691,23 @@ ESCURO, LARANJA = (30, 30, 30), (255, 127, 39)
 FAIXAS_SELO = ((6, 8, 20, 4), (6, 15, 14, 4), (6, 22, 7, 4))
 
 
-def _gravar_png(nome, largura, altura, blocos):
-    os.makedirs(DIR_SITE, exist_ok=True)
-    with open(os.path.join(DIR_SITE, nome), "wb") as f:
+def _gravar_png(build, nome, largura, altura, blocos):
+    os.makedirs(build.caminhos.site, exist_ok=True)
+    with open(os.path.join(build.caminhos.site, nome), "wb") as f:
         f.write(_png_solido(largura, altura, blocos, ESCURO))
 
 
-def _selo_png(nome, lado):
+def _selo_png(build, nome, lado):
     """Favicon raster de lado x lado: as faixas do SVG escaladas da grade 32."""
     k = lado / 32
     blocos = [
         (round(x * k), round(y * k), round(w * k), round(h * k), LARANJA)
         for x, y, w, h in FAIXAS_SELO
     ]
-    _gravar_png(nome, lado, lado, blocos)
+    _gravar_png(build, nome, lado, lado, blocos)
 
 
-def gerar_imagens():
+def gerar_imagens(build):
     """og:image e favicons, com a marca: tres faixas encurtando = o prazo.
 
     O SVG é o favicon principal; o PNG de 32 cobre navegador que não lê SVG
@@ -1710,9 +1720,9 @@ def gerar_imagens():
         y = topo + i * (altura_faixa + intervalo)
         blocos.append((esquerda, y, int(vao * fracao), altura_faixa, LARANJA))
     blocos.append((0, 606, 1200, 24, LARANJA))
-    _gravar_png("og.png", 1200, 630, blocos)
-    _selo_png("favicon-32.png", 32)
-    _selo_png("apple-touch-icon.png", 180)
+    _gravar_png(build, "og.png", 1200, 630, blocos)
+    _selo_png(build, "favicon-32.png", 32)
+    _selo_png(build, "apple-touch-icon.png", 180)
 
     faixas = "".join(
         f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#ff7f27"/>'
@@ -1723,10 +1733,10 @@ def gerar_imagens():
         '<rect width="32" height="32" rx="6" fill="#1e1e1e"/>'
         f"{faixas}</svg>"
     )
-    escrever("favicon.svg", favicon)
+    escrever(build, "favicon.svg", favicon)
 
 
-def gerar_estaticos(cfg):
+def gerar_estaticos(build):
     """CSS e JS em arquivo externo, com hash de conteúdo no nome.
 
     Inline eles eram 16,5 KB repetidos em cada página - 72% dos bytes do
@@ -1741,7 +1751,7 @@ def gerar_estaticos(cfg):
         ("css", "estilo.css", "estilo"),
         ("js", "app.js", "app"),
     ):
-        with open(os.path.join(DIR_TEMPLATES, origem), encoding="utf-8") as f:
+        with open(os.path.join(build.caminhos.templates, origem), encoding="utf-8") as f:
             conteudo = f.read()
         if chave == "css":
             # Os comentários explicam o código para quem mantém, não para
@@ -1750,11 +1760,11 @@ def gerar_estaticos(cfg):
             conteudo = re.sub(r"\n{3,}", "\n\n", conteudo).strip() + "\n"
         marca = hashlib.sha256(conteudo.encode("utf-8")).hexdigest()[:8]
         nome = f"{destino}.{marca}.{chave}"
-        escrever(nome, conteudo)
-        ESTATICOS[chave] = "/" + nome
+        escrever(build, nome, conteudo)
+        build.estaticos[chave] = "/" + nome
 
 
-def gerar_fontes(cfg):
+def gerar_fontes(build):
     """Copia as fontes auto-hospedadas (e as licenças OFL) para site/.
 
     Auto-hospedadas de propósito: a única requisição a terceiro que o site
@@ -1762,13 +1772,13 @@ def gerar_fontes(cfg):
     Google Fonts acrescentaria outra, sem estar declarada. São fontes
     variáveis: um arquivo por subset serve todos os pesos.
     """
-    if not os.path.isdir(DIR_FONTES):
+    if not os.path.isdir(build.caminhos.fontes):
         return
-    destino = os.path.join(DIR_SITE, "fontes")
+    destino = os.path.join(build.caminhos.site, "fontes")
     os.makedirs(destino, exist_ok=True)
-    marca = prefixo(cfg)
-    for nome in os.listdir(DIR_FONTES):
-        origem = os.path.join(DIR_FONTES, nome)
+    marca = prefixo(build.cfg)
+    for nome in os.listdir(build.caminhos.fontes):
+        origem = os.path.join(build.caminhos.fontes, nome)
         if nome.endswith(".css"):
             with open(origem, encoding="utf-8") as f:
                 css = f.read()
@@ -1783,22 +1793,22 @@ def gerar_fontes(cfg):
             shutil.copy2(origem, os.path.join(destino, nome))
 
 
-def gerar_cname(cfg):
+def gerar_cname(build):
     """O Pages exige CNAME na raiz publicada, e o site/ é apagado a cada build."""
-    dominio = cfg.get("dominio")
+    dominio = build.cfg.get("dominio")
     if dominio:
-        escrever("CNAME", dominio + chr(10))
+        escrever(build, "CNAME", dominio + chr(10))
 
 
-def gerar_indexnow(cfg):
+def gerar_indexnow(build):
     """Chave do IndexNow. O ping em si sai do workflow, com a lista de URLs
     que realmente mudaram (ver mudancas.txt)."""
-    chave = cfg.get("indexnow_key")
+    chave = build.cfg.get("indexnow_key")
     if chave:
-        escrever(chave + ".txt", chave)
+        escrever(build, chave + ".txt", chave)
 
 
-def gerar_feed(cfg, s):
+def gerar_feed(build):
     """RSS das viradas agendadas.
 
     E a única forma de push que este teste entrega: quem acompanha comex por
@@ -1809,12 +1819,13 @@ def gerar_feed(cfg, s):
     data da coleta em todos, o leitor de feed via 14 itens novos por dia.
     O lastBuildDate continua sendo a data da coleta.
     """
-    ref = s["data_referencia"]
-    vista = primeira_vista(date.fromisoformat(ref))
+    cfg, snapshot = build.cfg, build.snapshot
+    ref = snapshot["data_referencia"]
+    vista = primeira_vista(build.caminhos.historico, date.fromisoformat(ref))
     pub = data_rfc822(ref)
 
     itens = []
-    for v in s["viradas"]:
+    for v in snapshot["viradas"]:
         titulo = (
             f"NCM {v['ncm']}: {v['nome'] or v['atributo']} "
             f"vira obrigatório em {br(v['vira_obrigatorio_em'])}"
@@ -1840,6 +1851,7 @@ def gerar_feed(cfg, s):
         )
 
     escrever(
+        build,
         "feed.xml",
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">'
@@ -1857,17 +1869,11 @@ def gerar_feed(cfg, s):
     )
 
 
-def ler_lastmod():
+def ler_lastmod(caminho):
     """O lastmod.json da geração anterior; vazio se não existe ou é ilegível
     (o custo de um arquivo perdido é um dia de lastmod = hoje, não um build
     quebrado)."""
-    if not os.path.exists(ARQ_LASTMOD):
-        return {}
-    try:
-        with open(ARQ_LASTMOD, encoding="utf-8") as f:
-            anterior = json.load(f)
-    except (OSError, ValueError):
-        return {}
+    anterior = comum.ler_json_tolerante(caminho)
     return anterior if isinstance(anterior, dict) else {}
 
 
@@ -1890,22 +1896,20 @@ def calcular_lastmod(anterior, paginas, hoje):
     return atual, mudadas
 
 
-def gravar_lastmod(atual):
-    """Grava lastmod.json atomicamente (tmp + os.replace)."""
-    temporario = ARQ_LASTMOD + ".tmp"
-    with open(temporario, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(atual, f, ensure_ascii=False, sort_keys=True, indent=0)
-        f.write("\n")
-    os.replace(temporario, ARQ_LASTMOD)
+def gravar_lastmod(caminho, atual):
+    """Grava lastmod.json atomicamente. indent=0: uma chave por linha, para
+    o diff diário do git mostrar só as páginas que mudaram."""
+    comum.gravar_json_atomico(caminho, atual, indent=0, sort_keys=True)
 
 
-def gerar_sitemap(cfg, caminhos, s, datas, mudadas):
+def gerar_sitemap(build, caminhos, datas, mudadas):
     """Índice de sitemaps: 10 mil URLs num arquivo só é legal, mas ilegível.
 
     datas é o mapa de calcular_lastmod ({caminho: [hash, data]}); mudadas, a
     lista de caminhos cujo conteúdo mudou nesta geração.
     """
-    hoje = s["data_referencia"]
+    cfg = build.cfg
+    hoje = build.snapshot["data_referencia"]
 
     ordenados = sorted(set(caminhos))
     grupos = {"ncm": [], "atributos": [], "geral": []}
@@ -1931,6 +1935,7 @@ def gerar_sitemap(cfg, caminhos, s, datas, mudadas):
                 for c in bloco
             )
             escrever(
+                build,
                 arquivo,
                 '<?xml version="1.0" encoding="UTF-8"?>'
                 '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
@@ -1946,6 +1951,7 @@ def gerar_sitemap(cfg, caminhos, s, datas, mudadas):
         for a, quando in arquivos
     )
     escrever(
+        build,
         "sitemap.xml",
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
@@ -1953,10 +1959,11 @@ def gerar_sitemap(cfg, caminhos, s, datas, mudadas):
     )
 
     escrever(
+        build,
         "robots.txt",
         f"User-agent: *\nAllow: /\n\nSitemap: {absoluta(cfg, '/sitemap.xml')}\n",
     )
-    escrever(".nojekyll", "")
+    escrever(build, ".nojekyll", "")
 
     # O workflow lê este arquivo para pingar o IndexNow só com o que mudou.
     # Acima do teto isso não é "mudou conteúdo", é rebuild (primeira geração,
@@ -1964,12 +1971,14 @@ def gerar_sitemap(cfg, caminhos, s, datas, mudadas):
     # é ruído que só queima a credibilidade do ping.
     if len(mudadas) > TETO_INDEXNOW:
         aviso = sorted(mudadas)[:1]
-        escrever("mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in aviso))
+        escrever(build, "mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in aviso))
     else:
-        escrever("mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in sorted(mudadas)))
+        escrever(
+            build, "mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in sorted(mudadas))
+        )
 
 
-def versoes_divergem(s, catalogo, completo):
+def versoes_divergem(snapshot, catalogo, completo):
     """Os três arquivos têm de vir da mesma colheita.
 
     ultimo.json e atributos.json são versionados; completo.json não é. Um
@@ -1978,7 +1987,7 @@ def versoes_divergem(s, catalogo, completo):
     (nome, versao) quando divergem, vazia quando são iguais.
     """
     versoes = [
-        ("ultimo.json", (s.get("contagens") or {}).get("versao")),
+        ("ultimo.json", (snapshot.get("contagens") or {}).get("versao")),
         ("atributos.json", catalogo.get("versao")),
         ("completo.json", completo.get("versao")),
     ]
@@ -1987,61 +1996,114 @@ def versoes_divergem(s, catalogo, completo):
     return versoes
 
 
-def main():
-    for arquivo, quem in (
-        (ARQ_ULTIMO, "coletor.py"),
-        (ARQ_ATRIBUTOS, "coletor.py"),
-        (ARQ_COMPLETO, "coletor.py"),
-    ):
+def montar_build(caminhos, cfg):
+    """Lê os três arquivos de dados e monta o Build. Levanta RuntimeError
+    com mensagem legível quando falta arquivo ou quando eles não vieram da
+    mesma colheita - ANTES de qualquer escrita: um site de ontem no ar é
+    melhor que nenhum."""
+    for arquivo in (caminhos.ultimo, caminhos.atributos, caminhos.completo):
         if not os.path.exists(arquivo):
-            print(f"ERRO: {arquivo} nao existe. Rode {quem} antes.", file=sys.stderr)
-            return 1
-    with open(ARQ_ULTIMO, encoding="utf-8") as f:
-        s = json.load(f)
-    with open(ARQ_ATRIBUTOS, encoding="utf-8") as f:
+            raise RuntimeError(f"{arquivo} nao existe. Rode coletor.py antes.")
+    with open(caminhos.ultimo, encoding="utf-8") as f:
+        snapshot = json.load(f)
+    with open(caminhos.atributos, encoding="utf-8") as f:
         catalogo = json.load(f)
-    with open(ARQ_COMPLETO, encoding="utf-8") as f:
+    with open(caminhos.completo, encoding="utf-8") as f:
         completo = json.load(f)
 
-    # Antes de apagar site/: um site de ontem no ar é melhor que nenhum.
-    divergentes = versoes_divergem(s, catalogo, completo)
+    divergentes = versoes_divergem(snapshot, catalogo, completo)
     if divergentes:
         detalhe = ", ".join(f"{nome}={versao!r}" for nome, versao in divergentes)
-        print(
-            f"ERRO: os arquivos de dados não são da mesma colheita ({detalhe}). "
-            f"Rode coletor.py de novo.",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"os arquivos de dados não são da mesma colheita ({detalhe}). "
+            f"Rode coletor.py de novo."
         )
-        return 1
 
-    cfg = config()
-    PAGINAS.clear()
-    if os.path.isdir(DIR_SITE):
-        shutil.rmtree(DIR_SITE)
+    return Build(
+        cfg=cfg,
+        caminhos=caminhos,
+        snapshot=snapshot,
+        catalogo=catalogo,
+        completo=completo,
+        com_pagina={a["codigo"] for a in catalogo["atributos"]},
+        ncms_com_pagina=set(completo.get("ncms", {})),
+    )
 
-    com_pagina = {a["codigo"] for a in catalogo["atributos"]}
-    # Toda NCM do mapa completo ganha página; é o que decide link ou texto.
-    ncms_com_pagina = set(completo.get("ncms", {}))
-    gerar_estaticos(cfg)
+
+def gerar(build):
+    """Apaga site/ e gera tudo de novo. Devolve (caminhos_publicados, mudadas).
+
+    A ordem importa em dois pontos: os estáticos vêm antes de qualquer
+    página (as páginas referenciam o nome com hash), e o sitemap vem por
+    último, depois do lastmod, porque é dele que lê as datas.
+    """
+    if os.path.isdir(build.caminhos.site):
+        shutil.rmtree(build.caminhos.site)
+
+    gerar_estaticos(build)
     caminhos = []
-    caminhos += gerar_index(cfg, s, ncms_com_pagina)
-    caminhos += gerar_ncms(cfg, s, completo, com_pagina)
-    caminhos += gerar_atributos(cfg, s, catalogo, com_pagina, ncms_com_pagina)
-    caminhos += gerar_orgaos(cfg, s, catalogo)
-    caminhos += gerar_privacidade(cfg, s)
-    gerar_404(cfg, s)
-    gerar_feed(cfg, s)
-    gerar_imagens()
-    gerar_fontes(cfg)
-    gerar_cname(cfg)
-    gerar_indexnow(cfg)
-    datas, mudadas = calcular_lastmod(ler_lastmod(), PAGINAS, s["data_referencia"])
-    gravar_lastmod(datas)
-    gerar_sitemap(cfg, caminhos, s, datas, mudadas)
+    caminhos += gerar_index(build)
+    caminhos += gerar_ncms(build)
+    caminhos += gerar_atributos(build)
+    caminhos += gerar_orgaos(build)
+    caminhos += gerar_privacidade(build)
+    gerar_404(build)
+    gerar_feed(build)
+    gerar_imagens(build)
+    gerar_fontes(build)
+    gerar_cname(build)
+    gerar_indexnow(build)
+    datas, mudadas = calcular_lastmod(
+        ler_lastmod(build.caminhos.lastmod),
+        build.paginas,
+        build.snapshot["data_referencia"],
+    )
+    gravar_lastmod(build.caminhos.lastmod, datas)
+    gerar_sitemap(build, caminhos, datas, mudadas)
+    return caminhos, mudadas
 
+
+def analisar_argumentos(argv):
+    parser = argparse.ArgumentParser(description="Gera o site estático a partir de dados/.")
+    parser.add_argument(
+        "--raiz",
+        metavar="DIR",
+        help="raiz do repositório: dados/, templates/, fontes/ e config.json "
+        "(padrão: a pasta deste script)",
+    )
+    parser.add_argument(
+        "--saida", metavar="DIR", help="onde gravar o site (padrão: <raiz>/site)"
+    )
+    parser.add_argument(
+        "--base-path",
+        metavar="/PREFIXO",
+        help="sobrescreve o base_path do config.json (vazio para servir na raiz)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = analisar_argumentos(sys.argv[1:] if argv is None else argv)
+    caminhos = comum.Caminhos(
+        raiz=os.path.abspath(args.raiz) if args.raiz else comum.RAIZ,
+        site=os.path.abspath(args.saida) if args.saida else None,
+    )
+    cfg = comum.carregar_config(caminhos.config)
+    if args.base_path is not None:
+        cfg["base_path"] = args.base_path
+
+    try:
+        build = montar_build(caminhos, cfg)
+    except RuntimeError as e:
+        print(f"ERRO: {e}", file=sys.stderr)
+        return 1
+    caminhos_publicados, mudadas = gerar(build)
+
+    snapshot = build.snapshot
     print(
-        f"{len(caminhos)} paginas geradas em site/ "
-        f"(referencia {br(s['data_referencia'])}, {len(s['viradas'])} viradas)"
+        f"{len(caminhos_publicados)} paginas geradas em site/ "
+        f"(referencia {br(snapshot['data_referencia'])}, "
+        f"{len(snapshot['viradas'])} viradas)"
     )
     print(f"{len(mudadas)} URLs com conteudo novo desde a ultima geracao")
     if not (cfg.get("form_embed_url") or cfg.get("contato_email")):

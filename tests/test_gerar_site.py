@@ -12,6 +12,8 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import apoio  # noqa: E402
+import comum  # noqa: E402
 import gerar_site as g  # noqa: E402
 
 CFG = {
@@ -24,6 +26,24 @@ CFG = {
     "indexnow_key": "",
 }
 SEM_PREFIXO = dict(CFG, base_path="")
+SNAP = {"data_referencia": "2026-08-22", "contagens": {"versao": "1"}, "viradas": []}
+
+
+def setUpModule():
+    apoio.proibir_rede()
+
+
+def _build(raiz, snapshot=None, ncms_com_pagina=(), cfg=CFG):
+    """Um Build mínimo apontando para `raiz`. Os templates vêm do repositório
+    real quando raiz é o padrão; os testes que escrevem usam um tmp."""
+    return g.Build(
+        cfg=cfg,
+        caminhos=comum.Caminhos(raiz=raiz),
+        snapshot=snapshot or SNAP,
+        catalogo={"atributos": [], "orgaos": []},
+        completo={"ncms": {}, "atributos": {}},
+        ncms_com_pagina=set(ncms_com_pagina),
+    )
 
 
 class TestEsc(unittest.TestCase):
@@ -178,9 +198,10 @@ class TestConfig(unittest.TestCase):
             "dominio",
             "indexnow_key",
         }
-        real = set(g.config())
+        real = set(comum.carregar_config(comum.padrao().config))
         self.assertTrue(esperado <= real, f"faltam {esperado - real}")
-        readme = os.path.join(g.RAIZ, "README.md")
+        self.assertEqual(set(comum.CONFIG_PADRAO), esperado)
+        readme = os.path.join(comum.RAIZ, "README.md")
         with open(readme, encoding="utf-8") as f:
             texto = f.read()
         for chave in esperado:
@@ -190,19 +211,21 @@ class TestConfig(unittest.TestCase):
 class TestHistorico(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.antigo = g.DIR_HISTORICO
-        g.DIR_HISTORICO = self.tmp.name
-
-    def tearDown(self):
-        g.DIR_HISTORICO = self.antigo
-        self.tmp.cleanup()
+        self.addCleanup(self.tmp.cleanup)
+        self.build = _build(self.tmp.name)
+        os.makedirs(self.build.caminhos.historico)
 
     def _grava(self, nome, corpo):
-        with open(os.path.join(self.tmp.name, nome), "w", encoding="utf-8") as f:
+        caminho = os.path.join(self.build.caminhos.historico, nome)
+        with open(caminho, "w", encoding="utf-8") as f:
             f.write(corpo)
 
+    def _bloco(self, ncms_com_pagina=()):
+        self.build.ncms_com_pagina = set(ncms_com_pagina)
+        return g.bloco_historico(self.build, date(2026, 8, 22))
+
     def test_sem_arquivo_suficiente(self):
-        self.assertEqual(g.bloco_historico(CFG, date(2026, 8, 22)), "")
+        self.assertEqual(self._bloco(), "")
 
     def test_arquivo_corrompido_e_ignorado(self):
         self._grava("2026-08-20.json", "{ isto nao e json")
@@ -222,7 +245,7 @@ class TestHistorico(unittest.TestCase):
                 }
             ),
         )
-        html = g.bloco_historico(CFG, date(2026, 8, 22))
+        html = self._bloco()
         self.assertIn("Viradas novas", html)
 
     def test_schema_desconhecido_e_ignorado(self):
@@ -243,7 +266,7 @@ class TestHistorico(unittest.TestCase):
                 }
             ),
         )
-        g.bloco_historico(CFG, date(2026, 8, 22))
+        self._bloco()
 
     def test_janela_e_de_dias_e_nao_de_arquivos(self):
         self._grava(
@@ -264,7 +287,7 @@ class TestHistorico(unittest.TestCase):
         self._grava("2026-08-21.json", json.dumps({"viradas": []}))
         self._grava("2026-08-22.json", json.dumps({"viradas": []}))
         # O de 2020 esta fora dos 30 dias: nao pode virar "saiu da lista".
-        self.assertEqual(g.bloco_historico(CFG, date(2026, 8, 22)), "")
+        self.assertEqual(self._bloco(), "")
 
     def test_saiu_da_lista_mostra_nome_e_nao_codigo(self):
         self._grava(
@@ -283,7 +306,7 @@ class TestHistorico(unittest.TestCase):
             ),
         )
         self._grava("2026-08-22.json", json.dumps({"viradas": []}))
-        html = g.bloco_historico(CFG, date(2026, 8, 22))
+        html = self._bloco()
         self.assertIn("Nome Legivel", html)
         self.assertNotIn("ATT_9", html)
 
@@ -324,14 +347,14 @@ class TestHistorico(unittest.TestCase):
                 }
             ),
         )
-        html = g.bloco_historico(CFG, date(2026, 8, 22), {"1", "3"})
+        html = self._bloco({"1", "3"})
         self.assertIn('<li><a href="/repo/ncm/1/">1</a> — Com pagina</li>', html)
         self.assertIn("<li>2 — Sem pagina</li>", html)
         self.assertIn(
             '<li><a href="/repo/ncm/3/">3</a> — Nova, a partir de 01/01/2099', html
         )
         # Sem o conjunto, nada vira link: o site tem de continuar fechado.
-        self.assertNotIn("<a ", g.bloco_historico(CFG, date(2026, 8, 22)))
+        self.assertNotIn("<a ", self._bloco())
 
     def test_schema_acima_do_suportado_e_ignorado_com_aviso(self):
         self._grava(
@@ -368,7 +391,7 @@ class TestHistorico(unittest.TestCase):
         )
         erro = io.StringIO()
         with contextlib.redirect_stderr(erro):
-            html = g.bloco_historico(CFG, date(2026, 8, 22))
+            html = self._bloco()
         # O arquivo de ontem foi ignorado, entao a virada parece nova.
         self.assertIn("Viradas novas", html)
         self.assertIn("schema", erro.getvalue())
@@ -384,7 +407,7 @@ class TestHistorico(unittest.TestCase):
             "2026-08-23.json", json.dumps({"viradas": [dict(virada, ncm="futuro")]})
         )
         self._grava("notas.json", json.dumps({"viradas": [dict(virada, ncm="x")]}))
-        vista = g.primeira_vista(date(2026, 8, 22))
+        vista = g.primeira_vista(self.build.caminhos.historico, date(2026, 8, 22))
         # Fora da janela de 30 dias, mas dentro do historico: conta.
         self.assertEqual(vista[("1", "A", "2099-01-01")], "2026-07-01")
         # Adiamento e chave nova.
@@ -413,22 +436,17 @@ class TestFeed(unittest.TestCase):
         # Site e historico num diretorio temporario: o feed le o historico
         # real se nao for desviado, e o teste deixaria de ser hermetico.
         self.tmp = tempfile.TemporaryDirectory()
-        self.antigo = (g.DIR_SITE, g.DIR_HISTORICO)
-        g.DIR_SITE = os.path.join(self.tmp.name, "site")
-        g.DIR_HISTORICO = os.path.join(self.tmp.name, "historico")
-        os.makedirs(g.DIR_HISTORICO)
-
-    def tearDown(self):
-        g.DIR_SITE, g.DIR_HISTORICO = self.antigo
-        self.tmp.cleanup()
+        self.addCleanup(self.tmp.cleanup)
+        self.caminhos = comum.Caminhos(raiz=self.tmp.name)
+        os.makedirs(self.caminhos.historico)
 
     def _historico(self, nome, viradas):
-        with open(os.path.join(g.DIR_HISTORICO, nome), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.caminhos.historico, nome), "w", encoding="utf-8") as f:
             json.dump({"viradas": viradas}, f)
 
     def _feed(self, snap):
-        g.gerar_feed(CFG, snap)
-        with open(os.path.join(g.DIR_SITE, "feed.xml"), encoding="utf-8") as f:
+        g.gerar_feed(_build(self.tmp.name, snapshot=snap))
+        with open(os.path.join(self.caminhos.site, "feed.xml"), encoding="utf-8") as f:
             return f.read()
 
     def _pubdates(self, xml):
@@ -525,19 +543,13 @@ class TestLastmod(unittest.TestCase):
 
 
 class TestSitemap(unittest.TestCase):
-    SNAP = {"data_referencia": "2026-08-22", "contagens": {"versao": "1"}}
-
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.antigo = g.DIR_SITE
-        g.DIR_SITE = self.tmp.name
-
-    def tearDown(self):
-        g.DIR_SITE = self.antigo
-        self.tmp.cleanup()
+        self.addCleanup(self.tmp.cleanup)
+        self.build = _build(self.tmp.name)
 
     def _le(self, nome):
-        with open(os.path.join(self.tmp.name, nome), encoding="utf-8") as f:
+        with open(os.path.join(self.build.caminhos.site, nome), encoding="utf-8") as f:
             return f.read()
 
     def test_sitemap_index_lastmod_e_o_maximo_do_bloco(self):
@@ -547,7 +559,7 @@ class TestSitemap(unittest.TestCase):
             "/ncm/a/": ["h", "2026-08-10"],
             "/ncm/b/": ["h", "2026-08-05"],
         }
-        g.gerar_sitemap(CFG, caminhos, self.SNAP, datas, ["/ncm/a/"])
+        g.gerar_sitemap(self.build, caminhos, datas, ["/ncm/a/"])
         indice = ET.fromstring(self._le("sitemap.xml"))
         ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
         por_arquivo = {
@@ -569,22 +581,23 @@ class TestSitemap(unittest.TestCase):
 
     def test_rebuild_acima_do_teto_manda_uma_url_so(self):
         caminhos = [f"/ncm/{i}/" for i in range(g.TETO_INDEXNOW + 1)]
-        g.gerar_sitemap(CFG, caminhos, self.SNAP, {}, list(caminhos))
+        g.gerar_sitemap(self.build, caminhos, {}, list(caminhos))
         self.assertEqual(self._le("mudancas.txt").count("\n"), 1)
 
 
 class TestPagina(unittest.TestCase):
-    SNAP = {"data_referencia": "2026-08-22", "contagens": {"versao": "1"}}
+    # Os templates reais, sem escrever nada: pagina() só monta a string.
+    BUILD = _build(comum.RAIZ)
 
     def test_sem_caminho_sai_noindex_e_sem_canonical(self):
-        html = g.pagina(CFG, self.SNAP, "<p>x</p>", "T", "D", caminho=None)
+        html = g.pagina(self.BUILD, "<p>x</p>", "T", "D", caminho=None)
         self.assertIn('<meta name="robots" content="noindex">', html)
         self.assertNotIn("canonical", html)
         self.assertNotIn("og:url", html)
         self.assertNotIn("{{", html)
 
     def test_com_caminho_sai_canonical_e_og_url(self):
-        html = g.pagina(CFG, self.SNAP, "<p>x</p>", "T", "D", "/ncm/1/")
+        html = g.pagina(self.BUILD, "<p>x</p>", "T", "D", "/ncm/1/")
         self.assertIn(
             '<link rel="canonical" href="https://exemplo.test/repo/ncm/1/">', html
         )

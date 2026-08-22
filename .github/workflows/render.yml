@@ -4,7 +4,8 @@ name: Renderizar
 # um site novo a partir do dado que já está em main. Antes, a única forma
 # de republicar era bater na Receita de novo. O gerador não toca a rede;
 # o que ele precisa e não está versionado (dados/completo.json) vem do
-# cache que o coletar.yml grava no fim de cada dia.
+# cache que o coletar.yml grava no fim de cada dia - ou, quando o cache
+# expirou, é reapurado do ZIP oficial guardado na última release bruto-*.
 
 on:
   push:
@@ -46,15 +47,39 @@ jobs:
           restore-keys: |
             completo-
 
-      - name: Conferir o que veio do cache
+      # O cache expira com uma semana de inatividade. Sem ele, o mesmo
+      # completo.json sai do ZIP oficial guardado em Release: o coletor em
+      # modo --de-arquivo não toca a rede, e a referência é a do ultimo.json
+      # versionado, para o portão comparar o dia com ele mesmo. Tudo o que
+      # ele regrava em dados/ é restaurado em seguida - só o completo.json,
+      # que o git ignora, sobrevive. Sem release também, aí sim é erro.
+      - name: Conferir o cache ou reapurar da última release
         env:
           CHAVE: ${{ steps.cache.outputs.cache-matched-key }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          if [ -z "$CHAVE" ] || [ ! -s dados/completo.json ]; then
-            echo "::error::sem completo.json em cache; rode o workflow Coletar (ele grava o cache ao fim de cada dia) e dispare este de novo."
+          if [ -n "$CHAVE" ] && [ -s dados/completo.json ]; then
+            echo "completo.json restaurado de $CHAVE"
+            exit 0
+          fi
+          echo "sem completo.json em cache; procurando a última release bruto-*"
+          tag=$(gh release list --repo "$REPO" --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("bruto-"))] | sort_by(.createdAt) | reverse | .[0].tagName // empty')
+          if [ -z "$tag" ]; then
+            echo "::error::sem completo.json em cache e sem release bruto-*; rode o workflow Coletar (ele grava o cache e a release) e dispare este de novo."
             exit 1
           fi
-          echo "completo.json restaurado de $CHAVE"
+          echo "reapurando a partir da release $tag"
+          # Numa pasta, não num arquivo: a mesma versão coletada em dois dias
+          # tem dois assets, e o nome deles carrega a data - o último vence.
+          rm -rf "$RUNNER_TEMP/bruto" && mkdir -p "$RUNNER_TEMP/bruto"
+          gh release download "$tag" --repo "$REPO" --pattern "*.zip" --dir "$RUNNER_TEMP/bruto"
+          zip=$(ls "$RUNNER_TEMP"/bruto/*.zip | sort | tail -n 1)
+          referencia=$(python -c "import json; print(json.load(open('dados/ultimo.json', encoding='utf-8'))['data_referencia'])")
+          python coletor.py --de-arquivo "$zip" --referencia "$referencia"
+          git checkout -- dados
+          test -s dados/completo.json
 
       - name: Gerar o site
         id: site

@@ -8,12 +8,19 @@ grava um snapshot diário enxuto.
 Regra do produto:
     obrigatorio == false AND dataFimVigencia >= hoje (America/Sao_Paulo)
 
+Uso:
+    python coletor.py                          baixa o ZIP oficial e apura
+    python coletor.py --de-arquivo bruto.zip   apura um ZIP já baixado, sem rede
+    python coletor.py --dados DIR              grava em DIR em vez de dados/
+    python coletor.py --referencia AAAA-MM-DD  fixa o "hoje" da regra
+    python coletor.py --aceitar-queda          a válvula do portão (ver README)
+
 Sem dependências externas. Somente biblioteca padrão.
 """
 
-__version__ = "0.1.0"
-
+import argparse
 import collections
+import dataclasses
 import email.utils
 import hashlib
 import http.client
@@ -30,56 +37,17 @@ import zipfile
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import comum
+
+__version__ = comum.__version__
+AGENTE = comum.AGENTE
+
 # O ?perfil=PUBLICO é obrigatório: sem ele o servidor devolve 307 e, se o
 # redirect não for seguido, 304 bytes de HTML no lugar do ZIP.
 URL = (
     "https://portalunico.siscomex.gov.br/cadatributos/api"
     "/atributo-ncm/download/json?perfil=PUBLICO"
 )
-
-# Identifica o coletor para quem olhar o log do servidor. Sem isso vai
-# "Python-urllib/3.x", que é o primeiro padrão que um WAF corta.
-AGENTE = (
-    f"SentinelaDoCatalogo/{__version__} "
-    "(+https://github.com/viniciuscaetanosr/sentinela-catalogo)"
-)
-
-RAIZ = os.path.dirname(os.path.abspath(__file__))
-DIR_DADOS = os.path.join(RAIZ, "dados")
-
-# Os arquivos que o coletor lê e grava, agrupados para poderem apontar para
-# um diretório qualquer: os testes de ponta a ponta gravam num diretório
-# temporário, e sem isto precisariam remendar seis constantes do módulo.
-Caminhos = collections.namedtuple(
-    "Caminhos", "dados historico ultimo atributos completo bruto"
-)
-
-
-def caminhos_em(dir_dados):
-    """Os caminhos do coletor dentro de um diretório de dados."""
-    return Caminhos(
-        dados=dir_dados,
-        historico=os.path.join(dir_dados, "historico"),
-        ultimo=os.path.join(dir_dados, "ultimo.json"),
-        atributos=os.path.join(dir_dados, "atributos.json"),
-        # Mapa completo NCM -> atributos. NÃO é versionado (ver .gitignore):
-        # são ~4,8 MB (~120 KB comprimidos) que mudam todo dia e o gerador
-        # consome no mesmo run do CI; o render.yml os recebe via cache.
-        completo=os.path.join(dir_dados, "completo.json"),
-        # O ZIP exatamente como veio da Receita. Também fora do git (*.zip):
-        # o workflow guarda como artifact e, quando o conteúdo muda, como
-        # asset de Release - é o que permite reapurar um dia sem bater no
-        # endpoint, que não serve versões passadas.
-        bruto=os.path.join(dir_dados, "bruto.zip"),
-    )
-
-
-CAMINHOS = caminhos_em(DIR_DADOS)
-DIR_HISTORICO = CAMINHOS.historico
-ARQ_ULTIMO = CAMINHOS.ultimo
-ARQ_ATRIBUTOS = CAMINHOS.atributos
-ARQ_COMPLETO = CAMINHOS.completo
-ARQ_BRUTO = CAMINHOS.bruto
 
 # Tetos de tamanho. O ZIP real tem ~500 KB e o JSON ~17 MB: folga para anos
 # de crescimento, mas um servidor confuso não enche a memória do runner.
@@ -116,21 +84,9 @@ TETO_RETRY_AFTER = 300
 # forma incompatível tem de incrementar este número.
 SCHEMA = 1
 
-# Campos que mudam a cada execução sem que o dado tenha mudado. Ficam fora
-# da comparação que decide se vale reescrever o arquivo - senão todo run
-# produz um commit que não carrega informação nenhuma. Os quatro últimos são
-# fatos sobre a execução ("o ZIP de hoje é outro", "o catálogo foi reescrito
-# agora"), não sobre o catálogo - numa segunda rodada do mesmo dia eles
-# mudam sem que nada tenha mudado.
-VOLATEIS = (
-    "coletado_em",
-    "bytes_zip",
-    "disposition",
-    "catalogo_reescrito",
-    "bruto_novo",
-    "conteudo_identico",
-    "portao_ignorado",
-)
+# Os campos do snapshot que mudam a cada execução sem que o dado tenha
+# mudado moram em comum.VOLATEIS: é comum.reescrever_se_mudou quem os ignora.
+VOLATEIS = comum.VOLATEIS
 
 # Quantas datas inválidas entram no snapshot e no log. Ver datas_invalidas().
 MAX_DATAS_LOGADAS = 20
@@ -163,16 +119,6 @@ def _fuso():
 FUSO = _fuso()
 
 
-def _sem_volateis(texto):
-    """Ignora as linhas voláteis ao comparar - só o conteúdo importa."""
-    nl = chr(10)
-    return nl.join(
-        linha
-        for linha in texto.split(nl)
-        if not any('"' + c + '"' in linha for c in VOLATEIS)
-    )
-
-
 def hoje_br():
     """A data de referência da regra, no fuso de Brasília.
 
@@ -193,29 +139,8 @@ def slug(texto):
     return re.sub(r"[^a-z0-9]+", "-", plano.lower()).strip("-") or "sem-nome"
 
 
-def _gravar_json(caminho, dados):
-    """Escrita atômica.
-
-    open(..., "w") trunca antes de escrever: um job cancelado no meio deixa
-    o arquivo pela metade, e aí TODA execução seguinte quebra no json.load.
-    """
-    temporario = caminho + ".tmp"
-    with open(temporario, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(dados, f, ensure_ascii=False, indent=1)
-        f.write("\n")
-    os.replace(temporario, caminho)
-
-
-def _gravar_bytes(caminho, conteudo):
-    """Escrita atômica de bytes, pelo mesmo motivo de _gravar_json."""
-    temporario = caminho + ".tmp"
-    with open(temporario, "wb") as f:
-        f.write(conteudo)
-    os.replace(temporario, caminho)
-
-
-# O que baixar() devolve: o JSON descompactado, os metadados HTTP que vão
-# para o snapshot e o ZIP intacto, para ser guardado como veio.
+# O que baixar() e ler_bruto() devolvem: o JSON descompactado, os metadados
+# que vão para o snapshot e o ZIP intacto, para ser guardado como veio.
 Baixado = collections.namedtuple("Baixado", "conteudo meta bruto")
 
 
@@ -306,13 +231,25 @@ def _baixar_uma_vez(url, timeout):
             f"{tipo!r} ({len(bruto)} bytes): {_amostra(bruto)}"
         )
 
+    conteudo, meta_zip = _abrir_zip(bruto)
+    meta.update(meta_zip)
+    return Baixado(conteudo, meta, bruto)
+
+
+def _abrir_zip(bruto):
+    """O JSON de dentro do ZIP e o que o snapshot registra sobre ele.
+
+    É a parte de _baixar_uma_vez que não depende de ter vindo da rede: o
+    modo --de-arquivo passa por aqui com o ZIP lido do disco, e as mesmas
+    checagens valem - um asset de Release também pode estar truncado.
+    """
     z = zipfile.ZipFile(io.BytesIO(bruto))
     nomes = z.namelist()
     if len(nomes) != 1:
         raise RuntimeError(f"ZIP deveria ter 1 arquivo, tem {len(nomes)}: {nomes}")
 
     # O nome muda todo dia (ATRIBUTOS_POR_NCM_AAAA_MM_DD.json). Nunca hardcode.
-    meta["arquivo_interno"] = nomes[0]
+    meta = {"arquivo_interno": nomes[0]}
     # O tamanho declarado no cabeçalho do ZIP sai de graça; conferir antes
     # de descompactar evita uma bomba de descompressão.
     tamanho = z.getinfo(nomes[0]).file_size
@@ -324,6 +261,28 @@ def _baixar_uma_vez(url, timeout):
     # Os bytes do ZIP mudam a cada requisição porque o mtime interno é o
     # instante da geração. Só o JSON descompactado tem hash estável.
     meta["sha256_json"] = hashlib.sha256(conteudo).hexdigest()
+    return conteudo, meta
+
+
+def ler_bruto(caminho):
+    """Baixado a partir de um ZIP no disco - o modo offline.
+
+    Serve para reapurar um dia a partir do asset de Release (render.yml sem
+    cache) e para rodar localmente sem bater na Receita. Os metadados HTTP
+    ficam explicitamente vazios: um snapshot gerado assim diz que não veio
+    da rede, em vez de fingir um 200.
+    """
+    with open(caminho, "rb") as f:
+        bruto = f.read()
+    meta = {
+        "status": None,
+        "content_type": None,
+        "bytes_zip": len(bruto),
+        "disposition": None,
+        "origem": os.path.basename(caminho),
+    }
+    conteudo, meta_zip = _abrir_zip(bruto)
+    meta.update(meta_zip)
     return Baixado(conteudo, meta, bruto)
 
 
@@ -866,20 +825,19 @@ def conferir_sanidade(atual, anterior=None, aceitar_queda=False):
     return quedas
 
 
-def snapshot_anterior(caminho=ARQ_ULTIMO):
+def snapshot_anterior(caminho):
     """O último snapshot gravado, ou None.
 
     Ilegível vira aviso, não erro: o portão perde a base rolante por um dia,
     mas os pisos absolutos continuam valendo - e abortar aqui deixaria o
     arquivo quebrado no lugar para sempre.
     """
-    if not os.path.exists(caminho):
-        return None
-    try:
-        with open(caminho, encoding="utf-8") as f:
-            snapshot = json.load(f)
-    except (ValueError, OSError) as e:
+
+    def ilegivel(e):
         avisar(f"snapshot anterior ilegível ({e}); portão sem base rolante")
+
+    snapshot = comum.ler_json_tolerante(caminho, avisar=ilegivel)
+    if snapshot is None:
         return None
     if not isinstance(snapshot, dict):
         avisar("snapshot anterior não é um objeto JSON; portão sem base rolante")
@@ -888,18 +846,24 @@ def snapshot_anterior(caminho=ARQ_ULTIMO):
 
 
 def _contagens_de(snapshot):
-    """As contagens de um snapshot já carregado, com aviso se não houver."""
+    """(contagens, aviso) de um snapshot já carregado.
+
+    Devolve o aviso em vez de imprimi-lo para que apurar() continue pura:
+    quem chama decide se imprime ou acumula.
+    """
     if snapshot is None:
-        return None
+        return None, None
     c = snapshot.get("contagens")
     if not isinstance(c, dict):
-        avisar("snapshot anterior sem 'contagens'; portão sem base rolante")
-        return None
+        return None, "snapshot anterior sem 'contagens'; portão sem base rolante"
+    return c, None
+
+
+def contagens_anteriores(caminho):
+    c, aviso = _contagens_de(snapshot_anterior(caminho))
+    if aviso:
+        avisar(aviso)
     return c
-
-
-def contagens_anteriores(caminho=ARQ_ULTIMO):
-    return _contagens_de(snapshot_anterior(caminho))
 
 
 def versao_regrediu(atual, anterior):
@@ -913,68 +877,80 @@ def aceitar_queda_por_ambiente():
     return os.environ.get("SENTINELA_ACEITAR_QUEDA", "").strip() == "1"
 
 
-def _reescrever_se_mudou(caminho, corpo):
-    """Grava só quando o conteúdo mudou de verdade.
+@dataclasses.dataclass
+class Apuracao:
+    """O resultado de apurar(): tudo o que gravar() escreve, e os avisos.
 
-    Devolve True se escreveu. A comparação ignora os campos voláteis: sem
-    isso o carimbo de hora garante diff todo dia e o "Nada mudou hoje." do
-    workflow nunca dispara - 16 dos 18 primeiros commits do projeto não
-    carregavam nada além do relógio.
+    snapshot é o que vai para ultimo.json e historico/; catalogo, para
+    atributos.json; completo, para completo.json. com_pagina é o conjunto
+    de atributos com página própria (quem decide link ou texto no gerador).
+    Os avisos são devolvidos, não impressos: apurar() não faz I/O nenhum,
+    e quem chama decide se eles viram ::warning:: ou vão para um teste.
     """
-    anterior = ""
-    if os.path.exists(caminho):
-        with open(caminho, encoding="utf-8") as f:
-            anterior = f.read()
-    if _sem_volateis(corpo) == _sem_volateis(anterior.rstrip(chr(10))):
-        return False
-    temporario = caminho + ".tmp"
-    with open(temporario, "w", encoding="utf-8", newline="\n") as f:
-        f.write(corpo + chr(10))
-    os.replace(temporario, caminho)
-    return True
+
+    snapshot: dict
+    catalogo: dict
+    completo: dict
+    com_pagina: set
+    quedas_aceitas: list
+    avisos: list
 
 
-def coletar(referencia=None, dir_dados=None):
-    """Baixa, apura e grava o snapshot do dia. Devolve o snapshot.
+def apurar(dados, ref, meta_http, snapshot_anterior=None, aceitar_queda=False):
+    """Do JSON carregado ao que será gravado. Pura: sem rede, sem disco.
 
-    Nada é escrito antes do portão de sanidade - nem o ZIP bruto. Chaves
-    do snapshot que existem para o workflow ler: "bruto_novo" (o JSON de
-    hoje difere do de ontem: vale subir o ZIP como asset de Release),
+    Valida a forma, calcula as contagens, passa pelo portão de sanidade
+    (levanta RuntimeError se a colheita estiver degenerada) e monta o
+    snapshot, o catálogo e o mapa completo. `meta_http` é o que baixar() ou
+    ler_bruto() registrou; `snapshot_anterior` é a base rolante do portão.
+    Chaves do snapshot que existem para o workflow ler: "bruto_novo" (o JSON
+    de hoje difere do de ontem: vale subir o ZIP como asset de Release),
     "conteudo_identico" (é o mesmo JSON de ontem), "portao_ignorado" (uma
     queda rolante foi aceita pela válvula), "invariantes_falhas".
     """
-    cam = caminhos_em(dir_dados) if dir_dados else CAMINHOS
-    baixado = baixar()
-    dados = carregar(baixado.conteudo)
     validar_forma(dados)
-    meta = baixado.meta
-    ref = referencia or hoje_br()
+    avisos = []
+    meta = dict(meta_http)
 
-    # Portão de sanidade: antes de qualquer escrita.
-    anterior = snapshot_anterior(cam.ultimo)
-    contagens_antes = _contagens_de(anterior)
+    contagens_antes, aviso = _contagens_de(snapshot_anterior)
+    if aviso:
+        avisos.append(aviso)
     c = contagens(dados, ref)
-    quedas_aceitas = conferir_sanidade(
-        c, contagens_antes, aceitar_queda=aceitar_queda_por_ambiente()
-    )
+    quedas_aceitas = conferir_sanidade(c, contagens_antes, aceitar_queda=aceitar_queda)
     for queda in quedas_aceitas:
-        avisar(f"queda aceita por SENTINELA_ACEITAR_QUEDA=1: {queda}")
+        avisos.append(f"queda aceita por SENTINELA_ACEITAR_QUEDA=1: {queda}")
 
     versao_antes = (contagens_antes or {}).get("versao")
     if versao_regrediu(c["versao"], versao_antes):
-        avisar(f"versao regrediu de {versao_antes} para {c['versao']}")
+        avisos.append(f"versao regrediu de {versao_antes} para {c['versao']}")
     # O arquivo interno carrega a data de geração. Quando ela não é a de
     # hoje, o servidor ainda não regenerou - a coleta vale, mas é de ontem.
     meta["arquivo_do_dia"] = data_do_arquivo(meta.get("arquivo_interno")) == ref.isoformat()
     if not meta["arquivo_do_dia"]:
-        avisar(
+        avisos.append(
             f"arquivo interno {meta.get('arquivo_interno')!r} não é do dia "
             f"{ref.isoformat()}"
         )
 
-    sha_anterior = ((anterior or {}).get("http") or {}).get("sha256_json")
+    sha_anterior = ((snapshot_anterior or {}).get("http") or {}).get("sha256_json")
+    sha_atual = meta.get("sha256_json")
     vs = viradas(dados, ref)
     invalidas = datas_invalidas(dados)
+
+    # O catálogo é SEMPRE recalculado, mesmo quando o JSON é idêntico ao de
+    # ontem: ele é função do JSON, das viradas E da regra em
+    # merece_pagina(). Pular o recálculo quando o JSON não mudava deixava o
+    # arquivo em disco preso à regra antiga até a Receita publicar versão
+    # nova (888 páginas de atributo em vez de 391). O recálculo custa
+    # décimos de segundo; a economia de escrita fica em gravar().
+    publicaveis = atributos_publicaveis(dados, vs)
+    catalogo = {
+        "versao": dados.get("versao"),
+        "atributos": publicaveis,
+        "orgaos": orgaos(publicaveis),
+    }
+    com_pagina = {a["codigo"] for a in publicaveis}
+
     snapshot = {
         "schema": SCHEMA,
         "coletado_em": datetime.now(FUSO).isoformat(timespec="seconds"),
@@ -985,50 +961,77 @@ def coletar(referencia=None, dir_dados=None):
         "invariantes_falhas": [nome for nome, ok in invariantes(c) if not ok],
         "datas_invalidas_amostra": [list(x) for x in invalidas[:MAX_DATAS_LOGADAS]],
         "portao_ignorado": bool(quedas_aceitas),
-        "conteudo_identico": sha_anterior is not None
-        and meta["sha256_json"] == sha_anterior,
-        "bruto_novo": meta["sha256_json"] != sha_anterior,
+        "conteudo_identico": sha_anterior is not None and sha_atual == sha_anterior,
+        "bruto_novo": sha_atual != sha_anterior,
         "viradas": vs,
         "ncms_afetadas": ncms_afetadas(dados, vs),
+        # Só gravar() sabe se o catálogo foi reescrito; a chave já nasce
+        # aqui para o arquivo manter a ordem de sempre.
+        "catalogo_reescrito": None,
+        "atributos_publicaveis": len(publicaveis),
+        "orgaos": len(catalogo["orgaos"]),
     }
+    return Apuracao(
+        snapshot=snapshot,
+        catalogo=catalogo,
+        completo=mapa_completo(dados, com_pagina),
+        com_pagina=com_pagina,
+        quedas_aceitas=quedas_aceitas,
+        avisos=avisos,
+    )
 
-    # Daqui para baixo, escrita. O ZIP primeiro: é a evidência bruta do
-    # dia, e gravar sempre (mesmo quando idêntico) mantém o arquivo no
-    # disco em sincronia com o snapshot.
-    os.makedirs(cam.historico, exist_ok=True)
-    _gravar_bytes(cam.bruto, baixado.bruto)
 
-    # O detalhe dos atributos sai do snapshot diário: são centenas de itens e
-    # eles quase nunca mudam. Reescrever só quando o conteúdo muda mantém o
-    # commit diário pequeno. O catálogo é SEMPRE recalculado, mesmo quando o
-    # JSON é idêntico ao de ontem: ele é função do JSON, das viradas E da
-    # regra em merece_pagina(). Pular o recálculo quando o JSON não mudava
-    # deixava o arquivo em disco preso à regra antiga até a Receita publicar
-    # versão nova (888 páginas de atributo em vez de 391). O recálculo custa
-    # décimos de segundo; a economia de escrita já está em
-    # _reescrever_se_mudou.
-    publicaveis = atributos_publicaveis(dados, vs)
-    catalogo = {
-        "versao": dados.get("versao"),
-        "atributos": publicaveis,
-        "orgaos": orgaos(publicaveis),
-    }
-    corpo = json.dumps(catalogo, ensure_ascii=False, indent=1, sort_keys=True)
-    snapshot["catalogo_reescrito"] = _reescrever_se_mudou(cam.atributos, corpo)
-    snapshot["atributos_publicaveis"] = len(publicaveis)
-    snapshot["orgaos"] = len(catalogo["orgaos"])
+def gravar(apuracao, caminhos, bruto=None):
+    """Escreve o resultado de apurar() em dados/. Devolve o snapshot.
 
-    com_pagina = {a["codigo"] for a in publicaveis}
-    _gravar_json(cam.completo, mapa_completo(dados, com_pagina))
+    Roda DEPOIS do portão, nunca antes: apurar() levanta antes de chegar
+    aqui. A ordem importa - o ZIP primeiro, porque é a evidência bruta do
+    dia (gravado sempre, mesmo idêntico, para ficar em sincronia com o
+    snapshot); `bruto=None` é para os testes que não têm ZIP. Preenche
+    "catalogo_reescrito" e "gravado" no snapshot.
+    """
+    snapshot = apuracao.snapshot
+    os.makedirs(caminhos.historico, exist_ok=True)
+    if bruto is not None:
+        comum.gravar_bytes_atomico(caminhos.bruto, bruto)
+
+    # O detalhe dos atributos sai do snapshot diário: são centenas de itens
+    # e eles quase nunca mudam. Reescrever só quando o conteúdo muda mantém
+    # o commit diário pequeno.
+    corpo = json.dumps(apuracao.catalogo, ensure_ascii=False, indent=1, sort_keys=True)
+    snapshot["catalogo_reescrito"] = comum.reescrever_se_mudou(caminhos.atributos, corpo)
+
+    comum.gravar_json_atomico(caminhos.completo, apuracao.completo)
 
     corpo_snapshot = json.dumps(snapshot, ensure_ascii=False, indent=1)
-    caminho = os.path.join(cam.historico, f"{ref.isoformat()}.json")
+    diario = os.path.join(caminhos.historico, f"{snapshot['data_referencia']}.json")
     escritos = [
-        _reescrever_se_mudou(caminho, corpo_snapshot),
-        _reescrever_se_mudou(cam.ultimo, corpo_snapshot),
+        comum.reescrever_se_mudou(diario, corpo_snapshot),
+        comum.reescrever_se_mudou(caminhos.ultimo, corpo_snapshot),
     ]
     snapshot["gravado"] = any(escritos)
     return snapshot
+
+
+def coletar(caminhos=None, referencia=None, origem=None, aceitar_queda=None):
+    """Baixa (ou lê `origem`, um ZIP no disco), apura e grava. Devolve o snapshot.
+
+    Nada é escrito antes do portão de sanidade - nem o ZIP bruto. Os avisos
+    de apurar() saem aqui como ::warning::. `aceitar_queda=None` lê a
+    válvula do ambiente (SENTINELA_ACEITAR_QUEDA=1).
+    """
+    caminhos = caminhos or comum.padrao()
+    if aceitar_queda is None:
+        aceitar_queda = aceitar_queda_por_ambiente()
+    baixado = ler_bruto(origem) if origem else baixar()
+    dados = carregar(baixado.conteudo)
+    ref = referencia or hoje_br()
+
+    anterior = snapshot_anterior(caminhos.ultimo)
+    apuracao = apurar(dados, ref, baixado.meta, anterior, aceitar_queda=aceitar_queda)
+    for aviso in apuracao.avisos:
+        avisar(aviso)
+    return gravar(apuracao, caminhos, baixado.bruto)
 
 
 # Invariantes de FORMA: valem para sempre, independentes de quanto o arquivo
@@ -1049,9 +1052,57 @@ def invariantes(c):
     ]
 
 
-def main():
+def _data_iso(texto):
+    """Tipo do argparse para --referencia: AAAA-MM-DD estrito."""
     try:
-        snapshot = coletar()
+        return date.fromisoformat(normalizar_data(texto))
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from e
+
+
+def analisar_argumentos(argv):
+    parser = argparse.ArgumentParser(
+        description="Baixa a relação de atributos por NCM e apura as viradas."
+    )
+    parser.add_argument(
+        "--dados",
+        metavar="DIR",
+        help="diretório de dados (padrão: dados/ ao lado deste script)",
+    )
+    parser.add_argument(
+        "--de-arquivo",
+        metavar="ZIP",
+        help="apura este ZIP em vez de baixar - modo offline, sem tocar a rede",
+    )
+    parser.add_argument(
+        "--referencia",
+        metavar="AAAA-MM-DD",
+        type=_data_iso,
+        help="a data que vale como 'hoje' na regra (padrão: hoje em Brasília)",
+    )
+    parser.add_argument(
+        "--aceitar-queda",
+        action="store_true",
+        help="a válvula do portão; equivale a SENTINELA_ACEITAR_QUEDA=1",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = analisar_argumentos(sys.argv[1:] if argv is None else argv)
+    caminhos = comum.Caminhos(
+        raiz=comum.RAIZ, dados=os.path.abspath(args.dados) if args.dados else None
+    )
+    if args.de_arquivo and not os.path.exists(args.de_arquivo):
+        print(f"ERRO: {args.de_arquivo} não existe.", file=sys.stderr)
+        return 1
+    try:
+        snapshot = coletar(
+            caminhos,
+            referencia=args.referencia,
+            origem=args.de_arquivo,
+            aceitar_queda=args.aceitar_queda or aceitar_queda_por_ambiente(),
+        )
     except urllib.error.HTTPError as e:
         print(f"ERRO HTTP {e.code}: {e.reason}", file=sys.stderr)
         if e.code == 406:
