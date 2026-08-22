@@ -198,6 +198,8 @@ def tabela_viradas(viradas, referencia):
         prazo = "hoje" if dias == 0 else ("amanhã" if dias == 1 else f"em {dias} dias")
         # A barra da a leitura visual do prazo: 30 dias enche, hoje quase vazia.
         largura = min(100, max(6, round(dias / 30 * 100)))
+        # Urgencia acende so abaixo de 7 dias - por isso significa algo.
+        urg = " urgente" if dias <= 7 else ""
         linhas.append(
             f'<tr>'
             f'<td class="ncm"><a href="/ncm/{v["ncm"]}/">{esc(v["ncm"])}</a></td>'
@@ -205,8 +207,8 @@ def tabela_viradas(viradas, referencia):
             f'<br><span class="cod-inline">{esc(v["atributo"])}</span></td>'
             f'<td>{esc("/".join(v["orgaos"]) or "—")}</td>'
             f'<td class="data">{br(v["vira_obrigatorio_em"])}'
-            f'<br><span class="prazo-txt">{prazo}</span>'
-            f'<span class="prazo"><i style="width:{largura}%"></i></span>'
+            f'<br><span class="prazo-txt{urg}">{prazo}</span>'
+            f'<span class="prazo{urg}"><i style="width:{largura}%"></i></span>'
             f'</td>'
             f'</tr>')
     return ('<div class="rolagem"><table>'

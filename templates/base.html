@@ -1,6 +1,7 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" class="no-js">
 <head>
+<script>document.documentElement.className="js"</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{titulo}}</title>
@@ -24,6 +25,8 @@
   --accent:#a34a08; --accent-forte:#7d3505;
   --alerta:#a34a08; --alerta-bg:#fff2e8;
   --ok:#1c5c33; --ok-bg:#eaf3ec; --ok-borda:#cfe3d5;
+  /* urgencia: so acende abaixo de 7 dias, por isso significa algo */
+  --urgente:#b3200f;
   --sans:Figtree,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
@@ -116,6 +119,8 @@ thead th:last-child,td.data{text-align:right}
   background:var(--rule);overflow:hidden;vertical-align:middle;margin-left:8px}
 .prazo i{display:block;height:4px;background:var(--marca);animation:prazo .7s cubic-bezier(.22,.61,.36,1) both}
 .prazo-txt{font-family:var(--sans);font-size:.78rem;font-weight:600;color:var(--accent)}
+.prazo.urgente i{background:var(--urgente)}
+.prazo.urgente + .prazo-txt,.prazo-txt.urgente{color:var(--urgente)}
 .cod-inline{font-family:var(--mono);font-size:.78rem;color:var(--faint)}
 
 /* ------------------------------------------------------------------ captura */
@@ -168,23 +173,20 @@ main .chapeu{animation:sobe .45s ease-out both}
 main h1{animation:sobe .5s ease-out .07s both}
 main .lede{animation:sobe .5s ease-out .14s both}
 main .aviso{animation:sobe .5s ease-out .21s both}
-tbody tr{animation:linha .4s ease-out both}
-tbody tr:nth-child(1){animation-delay:.26s}
-tbody tr:nth-child(2){animation-delay:.30s}
-tbody tr:nth-child(3){animation-delay:.35s}
-tbody tr:nth-child(4){animation-delay:.39s}
-tbody tr:nth-child(5){animation-delay:.44s}
-tbody tr:nth-child(6){animation-delay:.48s}
-tbody tr:nth-child(7){animation-delay:.53s}
-tbody tr:nth-child(8){animation-delay:.57s}
-tbody tr:nth-child(9){animation-delay:.62s}
-tbody tr:nth-child(10){animation-delay:.66s}
-tbody tr:nth-child(11){animation-delay:.71s}
-tbody tr:nth-child(12){animation-delay:.75s}
-tbody tr:nth-child(13){animation-delay:.80s}
-tbody tr:nth-child(n+14){animation-delay:.84s}
+/* Revelacao ao scroll. O opacity:0 so vale com JS vivo (classe .js no
+   <html>) - sem isso, quem navega sem JS veria a pagina em branco. */
+.js .revelar{opacity:0;transform:translateY(8px)}
+.js .revelar.revelado{opacity:1;transform:none;
+  transition:opacity .45s ease-out,transform .45s cubic-bezier(.22,.61,.36,1)}
+
+/* As linhas agora sao reveladas ao entrar na tela, nao no load.
+   A pagina do SECEX tem 416 linhas: animar todas no primeiro
+   segundo gastava o efeito fora da tela. */
+
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
+  /* sem isto, o conteudo a revelar ficaria invisivel para sempre */
+  .js .revelar{opacity:1!important;transform:none!important}
 }
 
 @media (max-width:640px){
@@ -288,6 +290,49 @@ tbody tr:nth-child(n+14){animation-delay:.84s}
   }else{
     setTimeout(iniciar, 200);
   }
+})();
+</script>
+
+<script>
+/* Revelacao ao entrar na tela.
+
+   Substitui a cascata de load nas tabelas: a pagina do SECEX tem 416 linhas,
+   e anima-las todas no primeiro segundo gastava o efeito onde ninguem via.
+   Agora as linhas acendem conforme o leitor chega nelas.
+
+   Tambem revela o bloco de captura, que fica no fim de paginas longas e ate
+   agora aparecia sem tratamento nenhum - e e o ponto que o teste mede.
+
+   Degrada bem: sem IntersectionObserver, tudo e revelado de uma vez. */
+(function(){
+  var alvos = [].slice.call(document.querySelectorAll("tbody tr, .captura"));
+  if(!alvos.length) return;
+
+  function revelarTudo(){
+    alvos.forEach(function(el){ el.classList.add("revelar", "revelado"); });
+  }
+  if(!("IntersectionObserver" in window)){ revelarTudo(); return; }
+
+  alvos.forEach(function(el){ el.classList.add("revelar"); });
+
+  var obs = new IntersectionObserver(function(entradas){
+    var vistos = 0;
+    entradas.forEach(function(e){
+      if(!e.isIntersecting) return;
+      /* escalona so dentro do lote visivel, ate 8 - assim a cascata existe
+         na primeira tela e nao vira espera nas seguintes */
+      var atraso = Math.min(vistos, 8) * 45;
+      vistos++;
+      var el = e.target;
+      setTimeout(function(){ el.classList.add("revelado"); }, atraso);
+      obs.unobserve(el);
+    });
+  }, {rootMargin: "0px 0px -40px 0px", threshold: 0.01});
+
+  alvos.forEach(function(el){ obs.observe(el); });
+
+  /* rede de seguranca: nada pode ficar invisivel por falha do observer */
+  setTimeout(revelarTudo, 3000);
 })();
 </script>
 </body>
