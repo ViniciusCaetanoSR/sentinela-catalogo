@@ -189,11 +189,16 @@ main .aviso{animation:sobe .5s ease-out .21s both}
    segundo gastava o efeito fora da tela. */
 
 @media (prefers-reduced-motion:reduce){
-  *{animation:none!important;transition:none!important}
-  /* sem isto, o conteudo a revelar ficaria invisivel para sempre */
-  .js .revelar{opacity:1!important;transform:none!important}
-  /* a transicao morre aqui; sem isto a barra ficaria vazia */
-  .js .prazo i{width:var(--w,0)!important}
+  /* Politica: sai o MOVIMENTO, ficam esmaecimento e preenchimento.
+     A preferencia existe para deslocamento, zoom e parallax - nao para um
+     opacity nem para uma barra enchendo. Matar transition em bloco, como
+     estava antes, apagava tambem o que nao incomoda ninguem: a barra de
+     prazo ficava vazia e a revelacao virava um corte seco.
+     Por isso aqui se mata animation (os keyframes com translateY e scale)
+     e o transform - nao a transition inteira. */
+  *{animation:none!important}
+  .botao:hover,.botao:active{transform:none!important}
+  .js .revelar,.js .revelar.revelado{transform:none!important}
 }
 
 @media (max-width:640px){
