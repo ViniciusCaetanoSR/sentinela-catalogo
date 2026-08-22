@@ -238,23 +238,37 @@ tbody tr:nth-child(n+14){animation-delay:.84s}
 
 <script>
 /* Contagem do numero grande. So age se a camada 2 existir na pagina.
-   Sem JS, o numero fica no valor final - nada quebra. */
+   Sem JS, o numero fica no valor final - nada quebra.
+
+   O ritmo importa: o cartao entra com animacao de .6s apos .1s de atraso,
+   entao so fica solido aos 700ms. Contar rapido demais faz a animacao
+   terminar antes de o usuario conseguir ver - foi o que acontecia com
+   ease-out cubico em 900ms, que chegava ao valor final aos 630ms.
+   Por isso: comeca depois que o cartao aparece, dura proporcional ao alvo
+   e usa ease-out quadratico, que segura os ultimos digitos. */
 (function(){
   var alvo = document.querySelector("[data-contagem]");
   if(!alvo) return;
   var fim = parseInt(alvo.getAttribute("data-contagem"), 10);
-  if(isNaN(fim)) return;
+  if(isNaN(fim) || fim <= 0) return;
   var reduz = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   if(reduz) return;
-  var t0 = Date.now(), dur = 900, timer;
-  alvo.textContent = "0";
-  timer = setInterval(function(){
-    var p = Math.min(1, (Date.now() - t0) / dur);
-    var e = 1 - Math.pow(1 - p, 3);
-    alvo.textContent = Math.round(fim * e);
-    if(p >= 1) clearInterval(timer);
-  }, 40);
-  setTimeout(function(){ clearInterval(timer); alvo.textContent = fim; }, dur + 400);
+
+  var ATRASO = 200;                                    /* deixa o cartao surgir */
+  var dur = Math.min(1800, Math.max(700, fim * 120));  /* ~120ms por unidade */
+
+  alvo.textContent = "0";                              /* cartao ainda invisivel */
+  setTimeout(function(){
+    var t0 = performance.now();
+    function passo(agora){
+      var p = Math.min(1, (agora - t0) / dur);
+      var e = 1 - Math.pow(1 - p, 2);                  /* quadratico, nao cubico */
+      alvo.textContent = Math.round(fim * e);
+      if(p < 1) requestAnimationFrame(passo);
+      else alvo.textContent = fim;
+    }
+    requestAnimationFrame(passo);
+  }, ATRASO);
 })();
 </script>
 </body>
