@@ -2,21 +2,27 @@ name: Coletar e publicar
 
 on:
   schedule:
-    # 09:00 UTC = 06:00 em Brasilia. O arquivo oficial e regenerado por
-    # volta de 00:0x BRT, entao as 06:00 ja pegamos a versao do dia.
+    # 09:00 UTC = 06:00 em Brasília. O arquivo oficial é regenerado por
+    # volta de 00:0x BRT, então às 06:00 já pegamos a versão do dia.
     - cron: "0 9 * * *"
+    # Resgate: 13:00 UTC = 10:00 BRT. Se a das 06:00 caiu (Receita fora do
+    # ar, runner indisponível), esta tenta de novo. Se a primeira deu certo,
+    # o passo "Já coletado hoje?" encontra dados/historico/<hoje>.json e o
+    # job termina sem tocar na Receita.
+    - cron: "0 13 * * *"
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      # So o que muda a APURACAO entra aqui. templates/ e gerar_site.py
-      # ficaram de fora de proposito: mexer no CSS nao pede uma coleta nova,
-      # pede um render novo - e o render acontece de qualquer jeito, logo
-      # abaixo, sem precisar bater no endpoint da Receita.
-      - "coletor.py"
-      - "config.json"
+    inputs:
+      aceitar_queda:
+        description: >-
+          Válvula do portão: aceita queda rolante acima de 10 % (pisos
+          absolutos e versão continuam fatais). Use só quando a Receita
+          de fato encolheu a relação.
+        type: boolean
+        default: false
+  # push não dispara coleta: o ci.yml prova o código e o render.yml cuida
+  # de template/CSS. Bater na Receita só quando há dado novo para buscar.
 
-# Nada aqui pode escrever no repositorio por padrao. Cada job pede o que usa.
+# Nada aqui pode escrever no repositório por padrão. Cada job pede o que usa.
 permissions:
   contents: read
 
@@ -29,51 +35,115 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      # Sem rede e sem pip: a suite roda contra a fixture em tests/.
+      # Sem rede e sem pip: a suíte roda contra a fixture em tests/.
       - run: python -m unittest discover -s tests -v
 
   coletar:
     needs: [testes]
+    # Teste vermelho não pode custar o dia. O endpoint ignora ?data= e não
+    # serve versões passadas: um teste do GERADOR quebrado às 06:00 deixava
+    # um buraco definitivo em dados/historico/. No cron a coleta roda mesmo
+    # com a suíte vermelha - o portão de sanidade em runtime é quem protege
+    # a gravação. No disparo manual, a suíte continua mandando.
+    if: >-
+      always() &&
+      (needs.testes.result == 'success' || github.event_name == 'schedule')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
+    # Duas runs de coleta nunca ao mesmo tempo (o cron de resgate pode
+    # encostar num disparo manual). Sem cancelar: a que está rodando termina
+    # e a seguinte vê o snapshot já gravado.
+    concurrency:
+      group: coleta
+      cancel-in-progress: false
+    outputs:
+      pular: ${{ steps.hoje.outputs.pular }}
+      data: ${{ steps.coleta.outputs.data }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # O retry de push precisa enxergar a base do rebase.
-          fetch-depth: 0
+          # O retry de push é por regeneração, não por rebase: basta a ponta.
+          fetch-depth: 1
+
+      # O cron de resgate só tem trabalho se o das 06:00 falhou. A data é a
+      # de Brasília, a mesma que o coletor usa para nomear o snapshot.
+      - name: Já coletado hoje?
+        id: hoje
+        env:
+          EVENTO: ${{ github.event_name }}
+        run: |
+          HOJE=$(TZ=America/Sao_Paulo date +%F)
+          echo "hoje=$HOJE" >> "$GITHUB_OUTPUT"
+          if [ "$EVENTO" = "schedule" ] && [ -f "dados/historico/$HOJE.json" ]; then
+            echo "já coletado hoje ($HOJE): nada a fazer."
+            echo "pular=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pular=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        if: steps.hoje.outputs.pular != 'true'
         with:
           python-version: "3.12"
 
-      # Sem pip install: o coletor usa so a biblioteca padrao.
-      - name: Coletar do Portal Unico
+      # Sem pip install: o coletor usa só a biblioteca padrão.
+      # No cron `inputs` é vazio, então a comparação dá falso e a variável
+      # fica vazia - o coletor só liga a válvula com o valor exato "1".
+      - name: Coletar do Portal Único
         id: coleta
+        if: steps.hoje.outputs.pular != 'true'
+        env:
+          SENTINELA_ACEITAR_QUEDA: ${{ inputs.aceitar_queda == true && '1' || '' }}
         run: |
           python coletor.py
-          echo "data=$(python -c 'import json;print(json.load(open("dados/ultimo.json",encoding="utf-8"))["data_referencia"])')" >> "$GITHUB_OUTPUT"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          with open("dados/ultimo.json", encoding="utf-8") as f:
+              s = json.load(f)
+          print("data=" + s["data_referencia"])
+          print("versao=" + str(s["contagens"].get("versao", "")))
+          print("sha=" + str(s["http"].get("sha256_json", "")))
+          print("bruto_novo=" + str(bool(s.get("bruto_novo"))).lower())
+          PY
 
-      # Antes do gerador, de proposito. O endpoint ignora ?data= e nao serve
-      # versoes passadas: se um bug no render derrubar o job depois daqui, o
+      # Mesmo se o coletor caiu no meio: o que chegou ao disco fica 14 dias
+      # ao alcance de quem for recuperar o dia à mão (ver README).
+      - name: Guardar o snapshot do dia como artifact
+        if: always() && steps.hoje.outputs.pular != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: snapshot-${{ steps.coleta.outputs.data || steps.hoje.outputs.hoje }}
+          path: |
+            dados/historico/*.json
+            dados/bruto.zip
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Antes do gerador, de propósito. O endpoint ignora ?data= e não serve
+      # versões passadas: se um bug no render derrubar o job depois daqui, o
       # dia continua salvo. Na ordem anterior ele se perdia para sempre.
       - name: Commitar o snapshot
+        if: steps.hoje.outputs.pular != 'true'
+        env:
+          DATA: ${{ steps.coleta.outputs.data }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # site/ e dados/completo.json NAO sao versionados (ver .gitignore).
+          # site/, dados/completo.json e dados/bruto.zip NÃO são versionados
+          # (ver .gitignore).
           git add dados
           if git diff --staged --quiet; then
             echo "Nada mudou hoje."
             exit 0
           fi
-          # A data vem do coletor, no fuso de Brasilia. Usar `date -u` aqui
+          # A data vem do coletor, no fuso de Brasília. Usar `date -u` aqui
           # rotulava "coleta 2026-08-22" um commit que alterava o arquivo
-          # 2026-08-21.json, toda vez que a run caia depois das 21h BRT.
-          git commit -m "coleta ${{ steps.coleta.outputs.data }}"
+          # 2026-08-21.json, toda vez que a run caía depois das 21h BRT.
+          git commit -m "coleta $DATA"
 
-          # Retry por REGENERACAO, nao por rebase. O rebase conflitava
+          # Retry por REGENERAÇÃO, não por rebase. O rebase conflitava
           # justamente na linha que sempre difere, e um `git pull` que falha
           # mata o passo inteiro (o shell roda com -e).
           guardado="$RUNNER_TEMP/dados"
@@ -86,43 +156,87 @@ jobs:
             rm -rf dados && cp -r "$guardado" dados
             git add dados
             if git diff --staged --quiet; then
-              echo "outra run ja gravou o mesmo conteudo."
+              echo "outra run já gravou o mesmo conteúdo."
               exit 0
             fi
-            git commit -m "coleta ${{ steps.coleta.outputs.data }}"
+            git commit -m "coleta $DATA"
           done
-          echo "::error::nao foi possivel empurrar apos 3 tentativas"
+          echo "::error::não foi possível empurrar após 3 tentativas"
           exit 1
 
+      # O ZIP oficial muda de bytes a cada pedido, mas o JSON de dentro não.
+      # Quando o sha256 do JSON muda, o arquivo vai para um Release: é o
+      # único lugar de onde dá para reapurar um dia, já que a Receita não
+      # serve versões passadas. Nunca derruba o dia (continue-on-error).
+      - name: Guardar o bruto como release
+        if: steps.hoje.outputs.pular != 'true' && steps.coleta.outputs.bruto_novo == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DATA: ${{ steps.coleta.outputs.data }}
+          VERSAO: ${{ steps.coleta.outputs.versao }}
+          SHA: ${{ steps.coleta.outputs.sha }}
+        run: |
+          tag="bruto-$VERSAO"
+          if ! gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$REPO" \
+              --title "Arquivo oficial, versão $VERSAO" \
+              --notes "sha256 do JSON descompactado: $SHA. Coletado em $DATA."
+          fi
+          # Copiado com o nome final: o asset é baixado com esse nome, não
+          # como "bruto.zip". --clobber cobre a repetição do mesmo dia.
+          cp dados/bruto.zip "$RUNNER_TEMP/ATRIBUTOS_POR_NCM_$DATA.zip"
+          gh release upload "$tag" "$RUNNER_TEMP/ATRIBUTOS_POR_NCM_$DATA.zip" \
+            --repo "$REPO" --clobber
+
       - name: Gerar o site
+        if: steps.hoje.outputs.pular != 'true'
         run: python gerar_site.py
 
-      # Segundo commit, e de proposito. dados/lastmod.json e escrito pelo
-      # GERADOR, entao nao existia ainda no commit acima - e sem ele
-      # persistido o gerador acha que tudo mudou e carimba lastmod de hoje
-      # nas 11 mil URLs, que e exatamente o problema que ele resolve.
-      # Derivado, nao insubstituivel: se o push falhar, a proxima run refaz.
-      - name: Commitar o lastmod
+      # completo.json não é versionado (4,8 MB de churn diário), mas o
+      # render.yml precisa dele para republicar o site sem bater na Receita.
+      # A chave tem a data; o render restaura a mais recente por prefixo.
+      - name: Guardar completo.json em cache
+        if: steps.hoje.outputs.pular != 'true'
         continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: dados/completo.json
+          key: completo-${{ steps.coleta.outputs.data }}
+
+      # Segundo commit, e de propósito. dados/lastmod.json é escrito pelo
+      # GERADOR, então não existia ainda no commit acima - e sem ele
+      # persistido o gerador acha que tudo mudou e carimba lastmod de hoje
+      # nas 11 mil URLs, que é exatamente o problema que ele resolve.
+      # Derivado, não insubstituível: se o push falhar, a próxima run refaz.
+      - name: Commitar o lastmod
+        if: steps.hoje.outputs.pular != 'true'
+        continue-on-error: true
+        env:
+          DATA: ${{ steps.coleta.outputs.data }}
         run: |
           git add dados/lastmod.json
           if git diff --staged --quiet; then
             echo "lastmod inalterado."
             exit 0
           fi
-          git commit -m "lastmod ${{ steps.coleta.outputs.data }}"
+          git commit -m "lastmod $DATA"
           git push || {
             git fetch origin main
             git reset --hard origin/main
-            echo "push do lastmod rejeitado; a proxima run refaz."
+            echo "push do lastmod rejeitado; a próxima run refaz."
           }
 
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+        if: steps.hoje.outputs.pular != 'true'
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        if: steps.hoje.outputs.pular != 'true'
         with:
           path: site
 
       - name: Guardar a lista de URLs que mudaram
+        if: steps.hoje.outputs.pular != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mudancas
@@ -132,13 +246,16 @@ jobs:
 
   publicar:
     needs: [coletar]
+    # Quando o cron de resgate encontra o dia já coletado, não há o que
+    # publicar - o deploy das 06:00 já está no ar.
+    if: success() && needs.coletar.outputs.pular != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       pages: write
       id-token: write
-    # So o deploy disputa o recurso "pages". A coleta ficava no mesmo grupo e
-    # uma run enfileirada podia ser cancelada em silencio - um dia perdido.
+    # Só o deploy disputa o recurso "pages". A coleta ficava no mesmo grupo e
+    # uma run enfileirada podia ser cancelada em silêncio - um dia perdido.
     concurrency:
       group: pages
       cancel-in-progress: false
@@ -150,7 +267,8 @@ jobs:
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
 
   indexnow:
-    needs: [publicar]
+    needs: [coletar, publicar]
+    if: success() && needs.coletar.outputs.pular != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -160,12 +278,40 @@ jobs:
           name: mudancas
           path: .
         continue-on-error: true
-      # O arquivo de chave sozinho nao faz nada: so prova a posse. O ping e
-      # o que existe. Manda so o que mudou - o gerador ja poda a lista
-      # quando o build inteiro foi refeito.
+      # O arquivo de chave sozinho não faz nada: só prova a posse. O ping é
+      # o que existe. Manda só o que mudou - o gerador já poda a lista
+      # quando o build inteiro foi refeito. Sem indexnow_key no config.json
+      # o script encerra cedo, sem tocar a rede.
       - name: Pingar o IndexNow
         run: python indexnow.py
         continue-on-error: true
+
+  # A coleta das 06:00 falhou e a de resgate passou: a issue aberta pelo
+  # job "avisar" já não descreve a realidade. Só no cron e só quando a
+  # cadeia inteira (testes, coleta, deploy) ficou verde.
+  recuperou:
+    needs: [testes, coletar, publicar]
+    if: success() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Fechar as issues de falha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DATA: ${{ needs.coletar.outputs.data }}
+        run: |
+          abertas=$(gh issue list --repo "$REPO" --state open --label coleta-falhou \
+            --json number --jq '.[].number')
+          if [ -z "$abertas" ]; then
+            echo "nenhuma issue de falha aberta."
+            exit 0
+          fi
+          for n in $abertas; do
+            gh issue close "$n" --repo "$REPO" --comment "coleta de $DATA publicada"
+          done
 
   avisar:
     needs: [testes, coletar, publicar]
@@ -175,27 +321,43 @@ jobs:
     permissions:
       issues: write
     steps:
-      # Sem isto o unico sinal de que a coleta parou e o e-mail padrao do
-      # GitHub para uma pessoa so. O site continua no ar mostrando a data de
-      # ontem, com cara de saudavel.
+      # Sem isto o único sinal de que a coleta parou é o e-mail padrão do
+      # GitHub para uma pessoa só. O site continua no ar mostrando a data de
+      # ontem, com cara de saudável.
       - name: Abrir ou atualizar a issue de falha
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENTO: ${{ github.event_name }}
+          R_TESTES: ${{ needs.testes.result }}
+          R_COLETAR: ${{ needs.coletar.result }}
+          R_PUBLICAR: ${{ needs.publicar.result }}
         run: |
-          titulo="A coleta diaria falhou"
-          existente=$(gh issue list --repo "$REPO" --state open \
-            --search "\"$titulo\" in:title" --json number --jq '.[0].number')
-          corpo="A execucao de $(date -u +%Y-%m-%d\ %H:%M) UTC falhou.
+          # A label é a chave de deduplicação: buscar por título na API de
+          # search demora para indexar e abria issue duplicada.
+          gh label create coleta-falhou --repo "$REPO" --force \
+            --color B60205 --description "A coleta diária falhou"
+          existente=$(gh issue list --repo "$REPO" --state open --label coleta-falhou \
+            --json number --jq '.[0].number')
+          corpo="A execução de $(date -u +%Y-%m-%d\ %H:%M) UTC (evento: $EVENTO) falhou.
+
+          | job | resultado |
+          |---|---|
+          | testes | $R_TESTES |
+          | coletar | $R_COLETAR |
+          | publicar | $R_PUBLICAR |
 
           $RUN
 
-          Enquanto isso o site continua publicando o ultimo dado bom - com a
-          data antiga no rodape. O endpoint ignora \`?data=\`, entao cada dia
-          perdido e um buraco definitivo em \`dados/historico/\`."
+          Enquanto isso o site continua publicando o último dado bom - com a
+          data antiga no rodapé. O endpoint ignora \`?data=\`, então cada dia
+          perdido é um buraco definitivo em \`dados/historico/\`. O artifact
+          \`snapshot-<data>\` desta run guarda o que chegou ao disco (ver
+          'Recuperar um dia perdido' no README)."
           if [ -n "$existente" ]; then
             gh issue comment "$existente" --repo "$REPO" --body "$corpo"
           else
-            gh issue create --repo "$REPO" --title "$titulo" --body "$corpo"
+            gh issue create --repo "$REPO" --title "A coleta diária falhou" \
+              --label coleta-falhou --body "$corpo"
           fi

@@ -1,13 +1,13 @@
 name: Vigia
 
-# Interruptor de homem morto. O workflow de coleta so avisa quando FALHA -
-# ele nao tem como avisar que deixou de rodar. O GitHub desativa cron de
-# repositorio parado, e nesse caso o site fica no ar, bonito, servindo a
-# data de semanas atras sem nenhum sinal de que parou.
+# Interruptor de homem morto. O workflow de coleta só avisa quando FALHA -
+# ele não tem como avisar que deixou de rodar. O GitHub desativa cron de
+# repositório parado, e nesse caso o site fica no ar, bonito, servindo a
+# data de semanas atrás sem nenhum sinal de que parou.
 
 on:
   schedule:
-    - cron: "0 15 * * *"   # 12:00 BRT, seis horas depois da coleta
+    - cron: "0 15 * * *"   # 12:00 BRT, seis horas depois da coleta e duas do resgate
   workflow_dispatch:
 
 permissions:
@@ -23,11 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: O snapshot esta velho?
+      - name: O snapshot está velho?
         id: idade
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os
+          import json
           from datetime import date
           with open("dados/ultimo.json", encoding="utf-8") as f:
               ref = date.fromisoformat(json.load(f)["data_referencia"])
@@ -41,17 +41,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          REFERENCIA: ${{ steps.idade.outputs.referencia }}
+          DIAS: ${{ steps.idade.outputs.dias }}
         run: |
-          titulo="A coleta parou de rodar"
-          existente=$(gh issue list --repo "$REPO" --state open \
-            --search "\"$titulo\" in:title" --json number --jq '.[0].number')
-          corpo="O ultimo snapshot e de ${{ steps.idade.outputs.referencia }} - ha ${{ steps.idade.outputs.dias }} dias.
+          # Mesma deduplicação do coletar.yml: por label, não por busca.
+          gh label create vigia --repo "$REPO" --force \
+            --color D93F0B --description "A coleta parou de rodar"
+          existente=$(gh issue list --repo "$REPO" --state open --label vigia \
+            --json number --jq '.[0].number')
+          corpo="O último snapshot é de $REFERENCIA - há $DIAS dias.
 
-          O workflow de coleta nao esta falhando: ele nao esta rodando. Causa
-          provavel e o GitHub ter desativado o cron por inatividade no
-          repositorio. O site continua no ar servindo dado velho."
+          O workflow de coleta não está falhando: ele não está rodando. Causa
+          provável é o GitHub ter desativado o cron por inatividade no
+          repositório. O site continua no ar servindo dado velho."
           if [ -n "$existente" ]; then
             gh issue comment "$existente" --repo "$REPO" --body "$corpo"
           else
-            gh issue create --repo "$REPO" --title "$titulo" --body "$corpo"
+            gh issue create --repo "$REPO" --title "A coleta parou de rodar" \
+              --label vigia --body "$corpo"
           fi
