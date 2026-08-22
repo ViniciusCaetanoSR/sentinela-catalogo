@@ -125,6 +125,17 @@
           b.removeAttribute("data-feito");
           if(status) status.textContent = "";
         }, 2500);
+      }).catch(function(){
+        /* A API existe mas a escrita falhou: permissao negada, pagina sem
+           foco, iframe sem clipboard-write. Sem este catch a promessa
+           rejeitada morria em silencio e o botao parecia ter funcionado. */
+        b.setAttribute("data-erro", "1");
+        if(status) status.textContent =
+          "Não foi possível copiar — selecione o código e use Ctrl+C";
+        setTimeout(function(){
+          b.removeAttribute("data-erro");
+          if(status) status.textContent = "";
+        }, 5000);
       });
     });
   });

@@ -32,6 +32,12 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
 .wrap{max-width:900px;margin:0 auto;padding:0 24px 72px}
 a{color:var(--accent);text-decoration:none}
 a:hover{color:var(--accent-forte)}
+/* Link dentro de prosa leva sublinhado: so a cor (#a34a08 sobre #1e1e1e,
+   2,8:1) nao chega aos 3:1 que a WCAG exige para distinguir link de texto
+   sem outro sinal. Chips, tabelas, navegacao e botoes ficam como estao -
+   neles a forma ja diz que e link. */
+main p a:not(.botao),.lede a,.aviso a:not(.limpa a),.fonte a{
+  text-decoration:underline;text-underline-offset:.15em;text-decoration-thickness:1px}
 h1,h2,h3{line-height:1.1;margin:0;text-wrap:balance}
 h1{font-size:clamp(1.9rem,4.6vw,2.9rem);letter-spacing:-.035em;font-weight:600}
 h2{font-size:1.35rem;margin-top:48px;letter-spacing:-.02em;font-weight:600}
@@ -176,6 +182,7 @@ details.opcoes dd{margin:0}
   vertical-align:middle;transition:background .14s ease,border-color .14s ease}
 .copiar:hover{background:var(--marca-tint);border-color:var(--accent)}
 .copiar[data-feito]{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+.copiar[data-erro]{color:var(--urgente);border-color:var(--urgente)}
 html:not(.js) .copiar{display:none}
 
 .prazo-txt{font-family:var(--sans);font-size:.78rem;font-weight:600;color:var(--accent)}
@@ -217,14 +224,16 @@ dl.dominio dt{font-family:var(--mono);color:var(--accent);font-weight:600}
 dl.dominio dd{margin:0}
 .paginacao{display:flex;flex-wrap:wrap;gap:8px;margin:28px 0;font-family:var(--mono);
   font-size:.8rem}
-.paginacao a,.paginacao strong{padding:5px 10px;border:1px solid var(--rule);
-  border-radius:6px;background:var(--surface)}
-.paginacao strong{background:var(--marca-tint);border-color:var(--marca-borda)}
+.paginacao a{padding:5px 10px;border:1px solid var(--rule);
+  border-radius:6px;background:var(--surface);color:var(--ink)}
+.paginacao a:hover{border-color:var(--marca);background:var(--marca-tint)}
+.paginacao a[aria-current="page"]{background:var(--marca-tint);
+  border-color:var(--marca-borda);font-weight:600}
 
 /* -------------------------------------------------------------------- rodape */
 .fonte{margin-top:56px;padding-top:20px;border-top:1px solid var(--rule);
   font-family:var(--mono);font-size:.72rem;color:var(--faint);line-height:1.8}
-.fonte a{color:var(--faint);text-decoration:underline}
+.fonte a{color:var(--faint)}
 footer.rodape{background:var(--escuro);margin-top:64px;padding:28px 0;
   font-family:var(--mono);font-size:.72rem;color:var(--sobre-escuro-fraco)}
 footer.rodape .wrap{padding-bottom:0}
@@ -283,4 +292,25 @@ main .aviso{animation:sobe .5s ease-out .21s both}
     color:var(--faint);margin-bottom:2px}
   td[data-rot=""]::before,td:not([data-rot])::before{content:none}
   td.data,td.num{text-align:left}
+}
+
+/* ------------------------------------------------------------------ impressao
+   Quem imprime a pagina de uma NCM quer a tabela, nao o pedido de e-mail.
+   A revelacao ao scroll precisa ser desfeita: sem isso, tudo que ainda
+   nao tinha entrado na tela saia em branco no papel. */
+@media print{
+  *{animation:none!important;transition:none!important}
+  body{background:#fff;color:#000;font-size:11pt}
+  header.topo,footer.rodape,.captura,.pular,.copiar,.prazo{display:none!important}
+  a{color:inherit;text-decoration:underline}
+  .js .revelar,.js .revelar.revelado{opacity:1!important;transform:none!important}
+  .rolagem{overflow:visible}
+  table{min-width:0}
+  .contagem-cartao{background:#fff;border:1px solid #000;padding:18px 20px}
+  .contagem-num,.contagem-un,.contagem-fatos{color:#000}
+  .contagem-fatos{border-top-color:#000}
+  .contagem-fatos span{color:#444}
+  .aviso{background:none;border:1px solid #000;border-left-width:4px}
+  .tag{background:none!important;color:#000!important;border-color:#000}
+  .wrap{padding:0}
 }
