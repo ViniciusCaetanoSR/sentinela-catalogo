@@ -1,18 +1,22 @@
 """
 Coletor do Catálogo de Produtos do Portal Único (Siscomex).
 
-Baixa a relação publica de atributos por NCM, extrai as viradas agendadas
+Baixa a relação pública de atributos por NCM, extrai as viradas agendadas
 - atributos hoje opcionais com data marcada para virar obrigatórios - e
 grava um snapshot diário enxuto.
 
 Regra do produto:
     obrigatorio == false AND dataFimVigencia >= hoje (America/Sao_Paulo)
 
-Sem dependencias externas. Somente biblioteca padrao.
+Sem dependências externas. Somente biblioteca padrão.
 """
 
+__version__ = "0.1.0"
+
 import collections
+import email.utils
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -23,8 +27,8 @@ import unicodedata
 import urllib.error
 import urllib.request
 import zipfile
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # O ?perfil=PUBLICO é obrigatório: sem ele o servidor devolve 307 e, se o
 # redirect não for seguido, 304 bytes de HTML no lugar do ZIP.
@@ -33,42 +37,127 @@ URL = ("https://portalunico.siscomex.gov.br/cadatributos/api"
 
 # Identifica o coletor para quem olhar o log do servidor. Sem isso vai
 # "Python-urllib/3.x", que é o primeiro padrão que um WAF corta.
-AGENTE = ("SentinelaDoCatalogo/1.0 "
+AGENTE = (f"SentinelaDoCatalogo/{__version__} "
           "(+https://github.com/viniciuscaetanosr/sentinela-catalogo)")
 
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 DIR_DADOS = os.path.join(RAIZ, "dados")
-DIR_HISTORICO = os.path.join(DIR_DADOS, "historico")
-ARQ_ULTIMO = os.path.join(DIR_DADOS, "ultimo.json")
-ARQ_ATRIBUTOS = os.path.join(DIR_DADOS, "atributos.json")
-# Mapa completo NCM -> atributos. NAO é versionado (ver .gitignore): são
-# ~3 MB que mudam todo dia e o gerador consome no mesmo run do CI.
-ARQ_COMPLETO = os.path.join(DIR_DADOS, "completo.json")
 
-FUSO = ZoneInfo("America/Sao_Paulo")
+# Os arquivos que o coletor lê e grava, agrupados para poderem apontar para
+# um diretório qualquer: os testes de ponta a ponta gravam num diretório
+# temporário, e sem isto precisariam remendar seis constantes do módulo.
+Caminhos = collections.namedtuple(
+    "Caminhos", "dados historico ultimo atributos completo bruto")
 
-# Versão do formato do snapshot. bloco_historico() lê arquivos escritos por
-# versões antigas do código; sem esta marca não há como saber o que esperar.
+
+def caminhos_em(dir_dados):
+    """Os caminhos do coletor dentro de um diretório de dados."""
+    return Caminhos(
+        dados=dir_dados,
+        historico=os.path.join(dir_dados, "historico"),
+        ultimo=os.path.join(dir_dados, "ultimo.json"),
+        atributos=os.path.join(dir_dados, "atributos.json"),
+        # Mapa completo NCM -> atributos. NÃO é versionado (ver .gitignore):
+        # são ~4,8 MB (~120 KB comprimidos) que mudam todo dia e o gerador
+        # consome no mesmo run do CI; o render.yml os recebe via cache.
+        completo=os.path.join(dir_dados, "completo.json"),
+        # O ZIP exatamente como veio da Receita. Também fora do git (*.zip):
+        # o workflow guarda como artifact e, quando o conteúdo muda, como
+        # asset de Release - é o que permite reapurar um dia sem bater no
+        # endpoint, que não serve versões passadas.
+        bruto=os.path.join(dir_dados, "bruto.zip"),
+    )
+
+
+CAMINHOS = caminhos_em(DIR_DADOS)
+DIR_HISTORICO = CAMINHOS.historico
+ARQ_ULTIMO = CAMINHOS.ultimo
+ARQ_ATRIBUTOS = CAMINHOS.atributos
+ARQ_COMPLETO = CAMINHOS.completo
+ARQ_BRUTO = CAMINHOS.bruto
+
+# Tetos de tamanho. O ZIP real tem ~500 KB e o JSON ~17 MB: folga para anos
+# de crescimento, mas um servidor confuso não enche a memória do runner.
+MAX_ZIP = 20 * 1024 * 1024
+MAX_JSON = 200 * 1024 * 1024
+# Os quatro primeiros bytes de todo arquivo ZIP com ao menos uma entrada.
+ASSINATURA_ZIP = b"PK\x03\x04"
+# Quanto do corpo de uma resposta inesperada entra na mensagem de erro.
+AMOSTRA_CORPO = 200
+
+# Falhas que valem nova tentativa: rede, corpo lido pela metade
+# (IncompleteRead e ConnectionResetError NÃO são URLError - escapavam do
+# retry e custavam o dia com um traceback), ZIP truncado e as checagens de
+# conteúdo do próprio coletor (página de manutenção servida com 200).
+TRANSITORIAS = (urllib.error.URLError, OSError, http.client.HTTPException,
+                zipfile.BadZipFile, RuntimeError)
+# 4xx com que o servidor diz "agora não", e não "você errou".
+REPETIVEIS_4XX = (408, 429)
+# Esperas entre tentativas, em segundos: ~5 min no total, cabe nos 15 min
+# do job. Uma falha transitória às 09:00 UTC custa o dia inteiro, e o
+# endpoint ignora ?data= - não existe como buscar o arquivo de ontem.
+ESPERAS = (10, 30, 90, 180)
+# Um Retry-After maior que isto estoura o job; melhor tentar e falhar.
+TETO_RETRY_AFTER = 300
+
+# Versão do formato do snapshot. O gerador lê até 30 arquivos de
+# dados/historico/ escritos por versões antigas do código e IGNORA os que
+# declararem schema maior do que ele suporta - por isso toda mudança de
+# forma incompatível tem de incrementar este número.
 SCHEMA = 1
 
 # Campos que mudam a cada execução sem que o dado tenha mudado. Ficam fora
 # da comparação que decide se vale reescrever o arquivo - senão todo run
-# produz um commit que não carrega informação nenhuma.
-VOLATEIS = ("coletado_em", "bytes_zip", "disposition")
+# produz um commit que não carrega informação nenhuma. Os quatro últimos são
+# fatos sobre a execução ("o ZIP de hoje é outro", "o catálogo foi reescrito
+# agora"), não sobre o catálogo - numa segunda rodada do mesmo dia eles
+# mudam sem que nada tenha mudado.
+VOLATEIS = ("coletado_em", "bytes_zip", "disposition", "catalogo_reescrito",
+            "bruto_novo", "conteudo_identico", "portao_ignorado")
+
+# Quantas datas inválidas entram no snapshot e no log. Ver datas_invalidas().
+MAX_DATAS_LOGADAS = 20
+# Quantos problemas de forma cabem numa mensagem de erro legível.
+MAX_PROBLEMAS_LISTADOS = 10
+
+
+def avisar(mensagem):
+    """Aviso que não bloqueia a coleta.
+
+    O prefixo é o formato de comando do GitHub Actions: a linha vira uma
+    anotação amarela no resumo do job, em vez de se perder no meio do log.
+    """
+    print(f"::warning::{mensagem}", file=sys.stderr)
+
+
+def _fuso():
+    """America/Sao_Paulo, ou UTC-3 fixo quando a máquina não tem o tzdata.
+
+    Acontece no Windows sem o pacote tzdata. O Brasil não tem horário de
+    verão desde 2019, então o deslocamento fixo dá a mesma data.
+    """
+    try:
+        return ZoneInfo("America/Sao_Paulo")
+    except ZoneInfoNotFoundError:
+        avisar("sem tzdata para America/Sao_Paulo; usando UTC-3 fixo")
+        return timezone(timedelta(hours=-3))
+
+
+FUSO = _fuso()
 
 
 def _sem_volateis(texto):
     """Ignora as linhas voláteis ao comparar - só o conteúdo importa."""
     nl = chr(10)
-    return nl.join(l for l in texto.split(nl)
-                   if not any('"' + c + '"' in l for c in VOLATEIS))
+    return nl.join(linha for linha in texto.split(nl)
+                   if not any('"' + c + '"' in linha for c in VOLATEIS))
 
 
 def hoje_br():
-    """A data de referência da regra, no fuso de Brasilia.
+    """A data de referência da regra, no fuso de Brasília.
 
     O arquivo é regenerado pelo servidor por volta de 00:0x horário de
-    Brasilia. Usar UTC deslocaria a janela perto da meia-noite.
+    Brasília. Usar UTC deslocaria a janela perto da meia-noite.
     """
     return datetime.now(FUSO).date()
 
@@ -97,29 +186,75 @@ def _gravar_json(caminho, dados):
     os.replace(temporario, caminho)
 
 
-def baixar(url=URL, timeout=90, tentativas=3):
-    """Devolve (bytes_do_json, metadados_http).
+def _gravar_bytes(caminho, conteudo):
+    """Escrita atômica de bytes, pelo mesmo motivo de _gravar_json."""
+    temporario = caminho + ".tmp"
+    with open(temporario, "wb") as f:
+        f.write(conteudo)
+    os.replace(temporario, caminho)
 
-    Com retry: uma falha transitória às 09:00 UTC custa o dia inteiro, e o
-    endpoint ignora ?data= - não existe como buscar o arquivo de ontem.
-    Não repete em 4xx: 406 é header errado, e insistir não conserta.
+
+# O que baixar() devolve: o JSON descompactado, os metadados HTTP que vão
+# para o snapshot e o ZIP intacto, para ser guardado como veio.
+Baixado = collections.namedtuple("Baixado", "conteudo meta bruto")
+
+
+def _retry_after(erro):
+    """Segundos que o servidor pediu num 408/429, com teto. None se não veio.
+
+    Aceita as duas formas do cabeçalho: segundos ou data HTTP.
+    """
+    cabecalhos = getattr(erro, "headers", None) or {}
+    valor = cabecalhos.get("Retry-After")
+    if valor is None:
+        return None
+    valor = str(valor).strip()
+    if valor.isdigit():
+        segundos = int(valor)
+    else:
+        try:
+            quando = email.utils.parsedate_to_datetime(valor)
+        except (TypeError, ValueError):
+            return None
+        if quando.tzinfo is None:
+            quando = quando.replace(tzinfo=timezone.utc)
+        segundos = (quando - datetime.now(timezone.utc)).total_seconds()
+    return max(0, min(int(segundos), TETO_RETRY_AFTER))
+
+
+def baixar(url=URL, timeout=90, tentativas=5):
+    """Devolve Baixado(conteudo_do_json, metadados_http, bytes_do_zip).
+
+    Com retry e espera crescente (ESPERAS). Não repete em 4xx: 406 é header
+    errado, e insistir não conserta - exceto 408 e 429, que são o servidor
+    pedindo para voltar depois, e aí o Retry-After dele é respeitado.
     """
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
+        sugerida = None
         try:
             return _baixar_uma_vez(url, timeout)
         except urllib.error.HTTPError as e:
-            ultimo_erro = e
-            if e.code < 500:
+            if e.code < 500 and e.code not in REPETIVEIS_4XX:
                 raise
-        except (urllib.error.URLError, zipfile.BadZipFile, TimeoutError) as e:
+            ultimo_erro = e
+            sugerida = _retry_after(e)
+        except TRANSITORIAS as e:
             ultimo_erro = e
         if tentativa < tentativas:
-            espera = 2 ** tentativa
-            print(f"tentativa {tentativa}/{tentativas} falhou ({ultimo_erro}); "
+            espera = ESPERAS[min(tentativa, len(ESPERAS)) - 1]
+            if sugerida is not None:
+                espera = sugerida
+            print(f"tentativa {tentativa}/{tentativas} falhou ({ultimo_erro!r}); "
                   f"nova tentativa em {espera}s", file=sys.stderr)
             time.sleep(espera)
     raise ultimo_erro
+
+
+def _amostra(corpo):
+    """Os primeiros bytes de uma resposta inesperada, numa linha só."""
+    texto = corpo[:AMOSTRA_CORPO].decode("utf-8", errors="replace")
+    return " ".join(texto.split())
 
 
 def _baixar_uma_vez(url, timeout):
@@ -128,20 +263,24 @@ def _baixar_uma_vez(url, timeout):
     req = urllib.request.Request(url, headers={"Accept": "*/*",
                                                "User-Agent": AGENTE})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        bruto = r.read()
+        # Um byte além do teto: é o que distingue "coube" de "passou".
+        bruto = r.read(MAX_ZIP + 1)
         meta = {
             "status": r.status,
             "content_type": r.headers.get("Content-Type"),
             "bytes_zip": len(bruto),
             "disposition": r.headers.get("Content-Disposition"),
         }
+    if len(bruto) > MAX_ZIP:
+        raise RuntimeError(f"resposta maior que o teto de {MAX_ZIP} bytes")
 
     # Página de manutenção servida com 200 é a falha que passa despercebida:
-    # sem esta checagem ela vira BadZipFile lá embaixo, sem explicação.
+    # sem esta checagem ela vira BadZipFile lá embaixo, sem explicação. Os
+    # bytes mágicos valem como prova quando o Content-Type vier errado.
     tipo = (meta["content_type"] or "").lower()
-    if "zip" not in tipo:
+    if "zip" not in tipo and bruto[:4] != ASSINATURA_ZIP:
         raise RuntimeError("esperava application/zip, veio "
-                           f"{tipo!r} ({len(bruto)} bytes)")
+                           f"{tipo!r} ({len(bruto)} bytes): {_amostra(bruto)}")
 
     z = zipfile.ZipFile(io.BytesIO(bruto))
     nomes = z.namelist()
@@ -150,13 +289,27 @@ def _baixar_uma_vez(url, timeout):
 
     # O nome muda todo dia (ATRIBUTOS_POR_NCM_AAAA_MM_DD.json). Nunca hardcode.
     meta["arquivo_interno"] = nomes[0]
+    # O tamanho declarado no cabeçalho do ZIP sai de graça; conferir antes
+    # de descompactar evita uma bomba de descompressão.
+    tamanho = z.getinfo(nomes[0]).file_size
+    if tamanho > MAX_JSON:
+        raise RuntimeError(f"JSON declara {tamanho} bytes, acima do teto de {MAX_JSON}")
     conteudo = z.read(nomes[0])
     meta["bytes_json"] = len(conteudo)
 
     # Os bytes do ZIP mudam a cada requisição porque o mtime interno é o
-    # instante da geração. Só o JSON descompactado tem hash estavel.
+    # instante da geração. Só o JSON descompactado tem hash estável.
     meta["sha256_json"] = hashlib.sha256(conteudo).hexdigest()
-    return conteudo, meta
+    return Baixado(conteudo, meta, bruto)
+
+
+RE_DATA_ARQUIVO = re.compile(r"(\d{4})_(\d{2})_(\d{2})")
+
+
+def data_do_arquivo(nome):
+    """A data embutida em ATRIBUTOS_POR_NCM_AAAA_MM_DD.json, ou None."""
+    achado = RE_DATA_ARQUIVO.search(nome or "")
+    return "-".join(achado.groups()) if achado else None
 
 
 def carregar(conteudo):
@@ -164,25 +317,117 @@ def carregar(conteudo):
     return json.loads(conteudo.decode("utf-8"))
 
 
+def validar_forma(dados):
+    """Recusa o arquivo quando a FORMA não é a esperada. Roda antes do portão.
+
+    O portão vigia magnitude; isto vigia tipo. Um `obrigatorio` que chegasse
+    como a string "false" não derrubava nada: `is not False` o tratava como
+    obrigatório, viradas() devolvia lista vazia e o site publicava "nada
+    agendado" com exit 0. Errado com cara de saudável é o pior modo de falha.
+    """
+    if not isinstance(dados, dict):
+        raise RuntimeError("schema inesperado: a raiz não é um objeto JSON")
+    problemas = []
+    for chave in ("listaNcm", "detalhesAtributos"):
+        if not isinstance(dados.get(chave), list):
+            problemas.append(f"{chave} não é lista")
+    if not isinstance(dados.get("versao"), str) or not dados["versao"]:
+        problemas.append("versao ausente ou não é string")
+
+    lista = dados.get("listaNcm")
+    for ncm in (lista if isinstance(lista, list) else []):
+        if not isinstance(ncm, dict):
+            problemas.append(f"item de listaNcm não é objeto: {ncm!r:.60}")
+            continue
+        codigo = ncm.get("codigoNcm")
+        vinculos = ncm.get("listaAtributos")
+        if vinculos is None:
+            continue
+        if not isinstance(vinculos, list):
+            problemas.append(f"listaAtributos da NCM {codigo} não é lista")
+            continue
+        for v in vinculos:
+            if not isinstance(v, dict):
+                problemas.append(f"vínculo da NCM {codigo} não é objeto: {v!r:.60}")
+                continue
+            obrigatorio = v.get("obrigatorio")
+            if obrigatorio is not None and not isinstance(obrigatorio, bool):
+                problemas.append(
+                    f"obrigatorio={obrigatorio!r:.40} na NCM {codigo}, atributo "
+                    f"{v.get('codigo')} (deveria ser booleano)")
+
+    detalhes = dados.get("detalhesAtributos")
+    for d in (detalhes if isinstance(detalhes, list) else []):
+        if not isinstance(d, dict):
+            problemas.append(f"item de detalhesAtributos não é objeto: {d!r:.60}")
+            continue
+        for chave in ("orgaos", "dominio"):
+            valor = d.get(chave)
+            if valor is not None and not isinstance(valor, list):
+                problemas.append(f"{chave}={valor!r:.40} no atributo "
+                                 f"{d.get('codigo')} (deveria ser lista)")
+
+    if problemas:
+        extra = len(problemas) - MAX_PROBLEMAS_LISTADOS
+        resumo = "; ".join(problemas[:MAX_PROBLEMAS_LISTADOS])
+        if extra > 0:
+            resumo += f" (e mais {extra})"
+        raise RuntimeError("schema inesperado: " + resumo)
+
+
+RE_DATA_ISO = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def normalizar_data(valor):
+    """'AAAA-MM-DD' estrito -> 'AAAA-MM-DD'. Levanta ValueError se não for.
+
+    Só o formato não basta: "2026-02-30" passa no regex e quebra depois, no
+    gerador. E só o fromisoformat não basta: a partir do Python 3.11 ele
+    aceita "20260830" e "2026-W35", que o gerador não compara como data.
+    """
+    if not isinstance(valor, str) or not RE_DATA_ISO.fullmatch(valor):
+        raise ValueError(f"data fora do formato AAAA-MM-DD: {valor!r}")
+    return date.fromisoformat(valor).isoformat()
+
+
 def _fim_vigencia(vinculo):
-    """Le dataFimVigencia tolerando as DUAS convenções de ausência.
+    """Lê dataFimVigencia tolerando as DUAS convenções de ausência.
 
     Em listaAtributos a chave é omitida quando não há fim.
     Em detalhesAtributos ela vem como string vazia.
     Nunca comparar "" como data: "" < qualquer data é True.
 
-    Valida a data de verdade, não só o formato: um "2026-02-30" passava pelo
-    regex, era gravado, e só quebrava depois no gerador - com o dado ruim já
-    commitado e toda execução seguinte falhando.
+    Valor inválido é tratado como ausente, NÃO derruba a coleta: um único
+    "2026-02-30" num arquivo de 73 mil vínculos custava o dia inteiro. Quem
+    conta e vigia esses casos é datas_invalidas() e o portão.
     """
     valor = vinculo.get("dataFimVigencia")
     if not valor:
         return None
     try:
-        date.fromisoformat(valor)
-    except (ValueError, TypeError):
-        raise ValueError(f"dataFimVigencia invalida: {valor!r}")
-    return valor
+        return normalizar_data(valor)
+    except ValueError:
+        return None
+
+
+def datas_invalidas(dados):
+    """(ncm, atributo, valor) de cada dataFimVigencia que não é data.
+
+    Alimenta contagens()["datas_invalidas"], o portão (aborta acima de
+    LIMITE_DATAS_INVALIDAS) e o log, que mostra as primeiras para que o
+    problema seja reportado à fonte com código e valor.
+    """
+    saida = []
+    for ncm in lista_ncms(dados):
+        for v in vinculos_de(ncm):
+            valor = v.get("dataFimVigencia")
+            if not valor:
+                continue
+            try:
+                normalizar_data(valor)
+            except ValueError:
+                saida.append((ncm["codigoNcm"], v["codigo"], valor))
+    return saida
 
 
 def lista_ncms(dados):
@@ -192,7 +437,7 @@ def lista_ncms(dados):
     escrita duas vezes e o total_ncms contado em dobro.
     """
     vistas = {}
-    for ncm in dados.get("listaNcm", []):
+    for ncm in dados.get("listaNcm") or []:
         codigo = ncm.get("codigoNcm")
         if not codigo:
             continue
@@ -202,12 +447,12 @@ def lista_ncms(dados):
 
 def vinculos_de(ncm):
     """Os vínculos de uma NCM, descartando os que não têm código."""
-    return [v for v in ncm.get("listaAtributos", []) if v.get("codigo")]
+    return [v for v in ncm.get("listaAtributos") or [] if v.get("codigo")]
 
 
 def dicionario_atributos(dados):
     """código -> detalhe do atributo (nome, tipo, domínio, órgãos)."""
-    return {a["codigo"]: a for a in dados.get("detalhesAtributos", [])
+    return {a["codigo"]: a for a in dados.get("detalhesAtributos") or []
             if a.get("codigo")}
 
 
@@ -274,7 +519,7 @@ def detalhe_publico(detalhe):
         "forma_preenchimento": detalhe.get("formaPreenchimento"),
         "orgaos": detalhe.get("orgaos") or [],
         "multivalorado": detalhe.get("multivalorado"),
-        # dominio[].codigo é string e preserva zero a esquerda ("01").
+        # dominio[].codigo é string e preserva zero à esquerda ("01").
         # Truncado: ATT_14500 ("Município do destino final") tem 5.570 opções,
         # que renderizariam uma página de 187 mil caracteres.
         "dominio": [
@@ -444,7 +689,7 @@ def orgaos(atributos):
     """Um agrupamento por órgão anuente.
 
     Cria um eixo de navegação e de consulta novo ("atributos anvisa duimp") e
-    evita um indice único com centenas de itens.
+    evita um índice único com centenas de itens.
     """
     por_orgao = {}
     for a in atributos:
@@ -480,7 +725,7 @@ def orgaos(atributos):
 def contagens(dados, referencia=None):
     """Números de controle. Alimentam o portão de sanidade."""
     ncms = lista_ncms(dados)
-    brutos = [v for n in ncms for v in n.get("listaAtributos", [])]
+    brutos = [v for n in ncms for v in n.get("listaAtributos") or []]
     vinculos = [v for v in brutos if v.get("codigo")]
     hoje = (referencia or hoje_br()).isoformat()
     return {
@@ -492,7 +737,20 @@ def contagens(dados, referencia=None):
         "vinculos": len(vinculos),
         "descartados": len(brutos) - len(vinculos),
         "obrigatorios": sum(1 for v in vinculos if v.get("obrigatorio") is True),
+        # Presente mas não booleano ("false" como string): é o caso em que
+        # viradas() zera em silêncio. None conta como ausente.
+        "obrigatorio_nao_booleano": sum(
+            1 for v in vinculos
+            if v.get("obrigatorio") is not None
+            and not isinstance(v.get("obrigatorio"), bool)
+        ),
         "com_fim_vigencia": sum(1 for v in vinculos if _fim_vigencia(v)),
+        # Só os que ainda não venceram: é o número que tem de bater com
+        # len(viradas) enquanto todo vínculo com data for opcional.
+        "com_fim_vigencia_futuro": sum(
+            1 for v in vinculos if (_fim_vigencia(v) or "") >= hoje
+        ),
+        "datas_invalidas": len(datas_invalidas(dados)),
         "inicio_vigencia_futuro": sum(
             1 for v in vinculos if (v.get("dataInicioVigencia") or "") > hoje
         ),
@@ -501,52 +759,115 @@ def contagens(dados, referencia=None):
 
 # Piso absoluto, para a primeira execução, quando não há snapshot anterior
 # com que comparar. Bem abaixo do real: serve para pegar catástrofe, não
-# para pegar variação.
-PISO = {"ncms": 5000, "vinculos": 30000, "atributos_distintos": 500}
+# para pegar variação. "obrigatorios" entra porque é o número que zera
+# quando o campo muda de tipo - e aí o site publica "nada agendado".
+PISO = {"ncms": 5000, "vinculos": 30000, "atributos_distintos": 500,
+        "obrigatorios": 5000}
+# As contagens comparadas com o snapshot anterior (base rolante).
+ROLANTES = ("ncms", "vinculos", "atributos_distintos", "obrigatorios")
 # Quanto a base pode encolher de um dia para o outro antes de virar suspeita.
 QUEDA_MAXIMA = 0.10
+# Fração dos vínculos com dataFimVigencia inválida a partir da qual o
+# arquivo inteiro é suspeito, e não só uma linha digitada errado.
+LIMITE_DATAS_INVALIDAS = 0.001
 
 
-def conferir_sanidade(atual, anterior=None):
+def conferir_sanidade(atual, anterior=None, aceitar_queda=False):
     """Levanta se a colheita estiver degenerada. Roda ANTES de gravar.
 
     Sem isto, um ZIP válido com listaNcm vazia derruba atributos.json de
     1 MB para 85 bytes, o site de 918 páginas para 5, e o workflow commita e
     publica tudo com exit 0. O endpoint ignora ?data=: o dia não volta.
+
+    Com aceitar_queda=True (a válvula SENTINELA_ACEITAR_QUEDA=1) a queda
+    rolante vira aviso em vez de erro - para o dia em que a Receita de fato
+    encolher a base. Os pisos absolutos, a versão, os detalhes vazios e as
+    datas inválidas em massa continuam fatais: esses não são "a base mudou",
+    são "o arquivo veio quebrado". Devolve a lista das quedas aceitas.
     """
-    problemas = []
+    fatais = []
     if not atual.get("versao"):
-        problemas.append("versao ausente ou vazia")
+        fatais.append("versao ausente ou vazia")
     if atual.get("detalhes_atributos", 0) == 0:
-        problemas.append("detalhesAtributos vazio")
+        fatais.append("detalhesAtributos vazio")
 
     for chave, piso in PISO.items():
         if atual.get(chave, 0) < piso:
-            problemas.append(f"{chave}={atual.get(chave)} abaixo do piso {piso}")
+            fatais.append(f"{chave}={atual.get(chave)} abaixo do piso {piso}")
 
+    nao_booleanos = atual.get("obrigatorio_nao_booleano", 0)
+    if nao_booleanos:
+        fatais.append(f"obrigatorio não booleano em {nao_booleanos} vínculos")
+
+    invalidas = atual.get("datas_invalidas", 0)
+    if invalidas and invalidas > atual.get("vinculos", 0) * LIMITE_DATAS_INVALIDAS:
+        fatais.append(f"datas_invalidas={invalidas}, acima de "
+                      f"{LIMITE_DATAS_INVALIDAS:.1%} dos vínculos")
+
+    quedas = []
     if anterior:
-        for chave in ("ncms", "vinculos", "atributos_distintos"):
+        for chave in ROLANTES:
             antes, agora = anterior.get(chave), atual.get(chave)
             if not antes or agora is None:
                 continue
             if agora < antes * (1 - QUEDA_MAXIMA):
-                problemas.append(
-                    f"{chave} caiu de {antes} para {agora} "
-                    f"(mais de {QUEDA_MAXIMA:.0%})")
+                quedas.append(f"{chave} caiu de {antes} para {agora} "
+                              f"(mais de {QUEDA_MAXIMA:.0%})")
+    if quedas and not aceitar_queda:
+        fatais.extend(quedas)
+        quedas = []
 
-    if problemas:
+    if fatais:
         raise RuntimeError("colheita degenerada, nada foi gravado: "
-                           + "; ".join(problemas))
+                           + "; ".join(fatais))
+    return quedas
 
 
-def contagens_anteriores():
-    if not os.path.exists(ARQ_ULTIMO):
+def snapshot_anterior(caminho=ARQ_ULTIMO):
+    """O último snapshot gravado, ou None.
+
+    Ilegível vira aviso, não erro: o portão perde a base rolante por um dia,
+    mas os pisos absolutos continuam valendo - e abortar aqui deixaria o
+    arquivo quebrado no lugar para sempre.
+    """
+    if not os.path.exists(caminho):
         return None
     try:
-        with open(ARQ_ULTIMO, encoding="utf-8") as f:
-            return json.load(f).get("contagens")
-    except (ValueError, OSError):
+        with open(caminho, encoding="utf-8") as f:
+            snapshot = json.load(f)
+    except (ValueError, OSError) as e:
+        avisar(f"snapshot anterior ilegível ({e}); portão sem base rolante")
         return None
+    if not isinstance(snapshot, dict):
+        avisar("snapshot anterior não é um objeto JSON; portão sem base rolante")
+        return None
+    return snapshot
+
+
+def _contagens_de(snapshot):
+    """As contagens de um snapshot já carregado, com aviso se não houver."""
+    if snapshot is None:
+        return None
+    c = snapshot.get("contagens")
+    if not isinstance(c, dict):
+        avisar("snapshot anterior sem 'contagens'; portão sem base rolante")
+        return None
+    return c
+
+
+def contagens_anteriores(caminho=ARQ_ULTIMO):
+    return _contagens_de(snapshot_anterior(caminho))
+
+
+def versao_regrediu(atual, anterior):
+    """True só quando as duas versões são numéricas e a nova é menor."""
+    a, b = str(atual or ""), str(anterior or "")
+    return a.isdigit() and b.isdigit() and int(a) < int(b)
+
+
+def aceitar_queda_por_ambiente():
+    """A válvula de escape, lida do ambiente para o workflow_dispatch expor."""
+    return os.environ.get("SENTINELA_ACEITAR_QUEDA", "").strip() == "1"
 
 
 def _reescrever_se_mudou(caminho, corpo):
@@ -570,17 +891,44 @@ def _reescrever_se_mudou(caminho, corpo):
     return True
 
 
-def coletar():
-    """Baixa, apura e grava o snapshot do dia. Devolve o snapshot."""
-    conteudo, meta = baixar()
-    dados = carregar(conteudo)
-    ref = hoje_br()
+def coletar(referencia=None, dir_dados=None):
+    """Baixa, apura e grava o snapshot do dia. Devolve o snapshot.
+
+    Nada é escrito antes do portão de sanidade - nem o ZIP bruto. Chaves
+    do snapshot que existem para o workflow ler: "bruto_novo" (o JSON de
+    hoje difere do de ontem: vale subir o ZIP como asset de Release),
+    "conteudo_identico" (é o mesmo JSON de ontem), "portao_ignorado" (uma
+    queda rolante foi aceita pela válvula), "invariantes_falhas".
+    """
+    cam = caminhos_em(dir_dados) if dir_dados else CAMINHOS
+    baixado = baixar()
+    dados = carregar(baixado.conteudo)
+    validar_forma(dados)
+    meta = baixado.meta
+    ref = referencia or hoje_br()
 
     # Portão de sanidade: antes de qualquer escrita.
+    anterior = snapshot_anterior(cam.ultimo)
+    contagens_antes = _contagens_de(anterior)
     c = contagens(dados, ref)
-    conferir_sanidade(c, contagens_anteriores())
+    quedas_aceitas = conferir_sanidade(
+        c, contagens_antes, aceitar_queda=aceitar_queda_por_ambiente())
+    for queda in quedas_aceitas:
+        avisar(f"queda aceita por SENTINELA_ACEITAR_QUEDA=1: {queda}")
 
+    versao_antes = (contagens_antes or {}).get("versao")
+    if versao_regrediu(c["versao"], versao_antes):
+        avisar(f"versao regrediu de {versao_antes} para {c['versao']}")
+    # O arquivo interno carrega a data de geração. Quando ela não é a de
+    # hoje, o servidor ainda não regenerou - a coleta vale, mas é de ontem.
+    meta["arquivo_do_dia"] = data_do_arquivo(meta.get("arquivo_interno")) == ref.isoformat()
+    if not meta["arquivo_do_dia"]:
+        avisar(f"arquivo interno {meta.get('arquivo_interno')!r} não é do dia "
+               f"{ref.isoformat()}")
+
+    sha_anterior = ((anterior or {}).get("http") or {}).get("sha256_json")
     vs = viradas(dados, ref)
+    invalidas = datas_invalidas(dados)
     snapshot = {
         "schema": SCHEMA,
         "coletado_em": datetime.now(FUSO).isoformat(timespec="seconds"),
@@ -588,46 +936,65 @@ def coletar():
         "fonte": URL,
         "http": meta,
         "contagens": c,
+        "invariantes_falhas": [nome for nome, ok in invariantes(c) if not ok],
+        "datas_invalidas_amostra": [list(x) for x in invalidas[:MAX_DATAS_LOGADAS]],
+        "portao_ignorado": bool(quedas_aceitas),
+        "conteudo_identico": sha_anterior is not None
+        and meta["sha256_json"] == sha_anterior,
+        "bruto_novo": meta["sha256_json"] != sha_anterior,
         "viradas": vs,
         "ncms_afetadas": ncms_afetadas(dados, vs),
     }
 
+    # Daqui para baixo, escrita. O ZIP primeiro: é a evidência bruta do
+    # dia, e gravar sempre (mesmo quando idêntico) mantém o arquivo no
+    # disco em sincronia com o snapshot.
+    os.makedirs(cam.historico, exist_ok=True)
+    _gravar_bytes(cam.bruto, baixado.bruto)
+
     # O detalhe dos atributos sai do snapshot diário: são centenas de itens e
-    # eles quase nunca mudam. Reescrever só quando o conteúdo muda mantem o
-    # commit diário pequeno.
+    # eles quase nunca mudam. Reescrever só quando o conteúdo muda mantém o
+    # commit diário pequeno. O catálogo é SEMPRE recalculado, mesmo quando o
+    # JSON é idêntico ao de ontem: ele é função do JSON, das viradas E da
+    # regra em merece_pagina(). Pular o recálculo quando o JSON não mudava
+    # deixava o arquivo em disco preso à regra antiga até a Receita publicar
+    # versão nova (888 páginas de atributo em vez de 391). O recálculo custa
+    # décimos de segundo; a economia de escrita já está em
+    # _reescrever_se_mudou.
     publicaveis = atributos_publicaveis(dados, vs)
     catalogo = {
         "versao": dados.get("versao"),
-        "atualizado_em": ref.isoformat(),
         "atributos": publicaveis,
         "orgaos": orgaos(publicaveis),
     }
     corpo = json.dumps(catalogo, ensure_ascii=False, indent=1, sort_keys=True)
-    snapshot["catalogo_reescrito"] = _reescrever_se_mudou(ARQ_ATRIBUTOS, corpo)
+    snapshot["catalogo_reescrito"] = _reescrever_se_mudou(cam.atributos, corpo)
     snapshot["atributos_publicaveis"] = len(publicaveis)
     snapshot["orgaos"] = len(catalogo["orgaos"])
 
     com_pagina = {a["codigo"] for a in publicaveis}
-    _gravar_json(ARQ_COMPLETO, mapa_completo(dados, com_pagina))
+    _gravar_json(cam.completo, mapa_completo(dados, com_pagina))
 
-    os.makedirs(DIR_HISTORICO, exist_ok=True)
     corpo_snapshot = json.dumps(snapshot, ensure_ascii=False, indent=1)
-    caminho = os.path.join(DIR_HISTORICO, f"{ref.isoformat()}.json")
+    caminho = os.path.join(cam.historico, f"{ref.isoformat()}.json")
     escritos = [_reescrever_se_mudou(caminho, corpo_snapshot),
-                _reescrever_se_mudou(ARQ_ULTIMO, corpo_snapshot)]
+                _reescrever_se_mudou(cam.ultimo, corpo_snapshot)]
     snapshot["gravado"] = any(escritos)
     return snapshot
 
 
 # Invariantes de FORMA: valem para sempre, independentes de quanto o arquivo
 # cresceu. As de MAGNITUDE ficam em conferir_sanidade(), com base rolante -
-# uma tabela de números congelados vira ruído em dois dias.
+# uma tabela de números congelados vira ruído em dois dias. Não bloqueiam:
+# vão para o snapshot ("invariantes_falhas") e viram aviso no Actions.
 def invariantes(c):
     return [
         ("versao e string", isinstance(c.get("versao"), str)),
         ("detalhes == distintos",
          c.get("detalhes_atributos") == c.get("atributos_distintos")),
         ("nenhum registro descartado", c.get("descartados") == 0),
+        ("obrigatorio sempre booleano", c.get("obrigatorio_nao_booleano") == 0),
+        ("nenhuma dataFimVigencia invalida", c.get("datas_invalidas") == 0),
         ("nenhum inicio de vigencia futuro",
          c.get("inicio_vigencia_futuro") == 0),
     ]
@@ -639,11 +1006,16 @@ def main():
     except urllib.error.HTTPError as e:
         print(f"ERRO HTTP {e.code}: {e.reason}", file=sys.stderr)
         if e.code == 406:
-            print("406 = header Accept errado. O endpoint so serve application/zip.",
+            print("406 = header Accept errado. O endpoint só serve application/zip.",
                   file=sys.stderr)
         return 1
     except urllib.error.URLError as e:
         print(f"ERRO de rede: {e.reason}", file=sys.stderr)
+        return 1
+    except (http.client.HTTPException, OSError) as e:
+        # IncompleteRead, ConnectionResetError, disco cheio: nenhum é
+        # URLError, e sem isto o dia terminava num traceback cru.
+        print(f"ERRO de rede ou de disco: {type(e).__name__}: {e}", file=sys.stderr)
         return 1
     except (RuntimeError, ValueError, zipfile.BadZipFile) as e:
         print(f"ERRO: {e}", file=sys.stderr)
@@ -659,10 +1031,26 @@ def main():
     print("Invariantes:")
     for nome, ok in invariantes(c):
         print(f"  {'ok  ' if ok else 'FALHA'} {nome}")
+    for nome in snapshot.get("invariantes_falhas", []):
+        avisar(f"invariante violada: {nome}")
+    for ncm, atributo, valor in snapshot.get("datas_invalidas_amostra", []):
+        avisar(f"dataFimVigencia inválida na NCM {ncm}, atributo {atributo}: {valor!r}")
+    restantes = c.get("datas_invalidas", 0) - MAX_DATAS_LOGADAS
+    if restantes > 0:
+        avisar(f"... e mais {restantes} datas inválidas")
+    # Há fim de vigência FUTURO no arquivo mas nenhuma virada: algo na forma
+    # mudou e o filtro de viradas() deixou de enxergar. As datas já vencidas
+    # ficam de fora - senão o aviso dispararia todo dia depois de um corte.
+    futuros = c.get("com_fim_vigencia_futuro", 0)
+    if futuros > 0 and not v:
+        avisar(f"{futuros} vínculos com dataFimVigencia futura e nenhuma "
+               "virada agendada: confira se o filtro ainda enxerga o arquivo")
     print()
+    if snapshot.get("conteudo_identico"):
+        print("JSON idêntico ao da coleta anterior.")
+    situacao = "reescrito" if snapshot.get("catalogo_reescrito") else "inalterado"
     print(f"{snapshot.get('atributos_publicaveis', 0)} atributos publicaveis em "
-          f"{snapshot.get('orgaos', 0)} orgaos"
-          f"{' (catalogo reescrito)' if snapshot.get('catalogo_reescrito') else ' (catalogo inalterado)'}")
+          f"{snapshot.get('orgaos', 0)} orgaos (catalogo {situacao})")
     if not snapshot.get("gravado"):
         print("Nada mudou hoje: snapshot identico ao anterior, nada reescrito.")
     print()
