@@ -117,7 +117,13 @@ thead th:last-child,td.data{text-align:right}
 .contagem-fatos span{color:var(--sobre-escuro-fraco)}
 .prazo{display:inline-block;width:64px;height:4px;border-radius:99px;
   background:var(--rule);overflow:hidden;vertical-align:middle;margin-left:8px}
-.prazo i{display:block;height:4px;background:var(--marca);animation:prazo .7s cubic-bezier(.22,.61,.36,1) both}
+/* O preenchimento acompanha a REVELACAO da linha, nao o load. Antes era
+   animation no load: com as linhas reveladas ao scroll, a barra enchia
+   enquanto a linha estava invisivel e chegava cheia na tela.
+   Sem JS (sem a classe .js) a largura final se aplica direto. */
+.prazo i{display:block;height:4px;background:var(--marca);width:var(--w,0)}
+.js .prazo i{width:0;transition:width .7s cubic-bezier(.22,.61,.36,1) .12s}
+.js .revelado .prazo i{width:var(--w,0)}
 .prazo-txt{font-family:var(--sans);font-size:.78rem;font-weight:600;color:var(--accent)}
 .prazo.urgente i{background:var(--urgente)}
 .prazo.urgente + .prazo-txt,.prazo-txt.urgente{color:var(--urgente)}
@@ -168,7 +174,6 @@ footer.rodape .wrap{padding-bottom:0}
 @keyframes sobe{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
 @keyframes cartao{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:none}}
 @keyframes linha{from{opacity:0}to{opacity:1}}
-@keyframes prazo{from{width:0}}
 main .chapeu{animation:sobe .45s ease-out both}
 main h1{animation:sobe .5s ease-out .07s both}
 main .lede{animation:sobe .5s ease-out .14s both}
@@ -187,6 +192,8 @@ main .aviso{animation:sobe .5s ease-out .21s both}
   *{animation:none!important;transition:none!important}
   /* sem isto, o conteudo a revelar ficaria invisivel para sempre */
   .js .revelar{opacity:1!important;transform:none!important}
+  /* a transicao morre aqui; sem isto a barra ficaria vazia */
+  .js .prazo i{width:var(--w,0)!important}
 }
 
 @media (max-width:640px){

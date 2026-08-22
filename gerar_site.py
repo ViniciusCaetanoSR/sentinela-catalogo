@@ -208,7 +208,7 @@ def tabela_viradas(viradas, referencia):
             f'<td>{esc("/".join(v["orgaos"]) or "—")}</td>'
             f'<td class="data">{br(v["vira_obrigatorio_em"])}'
             f'<br><span class="prazo-txt{urg}">{prazo}</span>'
-            f'<span class="prazo{urg}"><i style="width:{largura}%"></i></span>'
+            f'<span class="prazo{urg}"><i style="--w:{largura}%"></i></span>'
             f'</td>'
             f'</tr>')
     return ('<div class="rolagem"><table>'
