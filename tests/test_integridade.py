@@ -5,11 +5,12 @@ ficaram meses no ar, e e o que segura o corte das paginas quase-duplicadas -
 cortar um atributo sem parar de linkar para ele quebraria o site em silencio.
 """
 
-import json
-import os
 import contextlib
 import io
+import json
+import os
 import re
+import struct
 import sys
 import tempfile
 import unittest
@@ -28,29 +29,34 @@ RE_LINK = re.compile(r'(?:href|src)="([^"]+)"')
 EXTERNO = ("http://", "https://", "mailto:", "//", "#", "data:")
 
 
-def _monta(destino, base_path):
-    """Roda coletor (sem rede) e gerador contra um diretorio temporario."""
+def _monta(destino, base_path, referencia=HOJE, ajustar=None):
+    """Roda coletor (sem rede) e gerador contra um diretorio temporario.
+
+    ajustar(snapshot, catalogo, completo) roda antes da gravacao, para os
+    testes que precisam de um dado deliberadamente errado.
+    """
     with open(FIXTURE, encoding="utf-8") as f:
         dados = json.load(f)
 
-    vs = coletor.viradas(dados, HOJE)
+    vs = coletor.viradas(dados, referencia)
     publicaveis = coletor.atributos_publicaveis(dados, vs)
     snapshot = {
         "schema": coletor.SCHEMA,
-        "coletado_em": "2026-08-22T06:00:00-03:00",
-        "data_referencia": HOJE.isoformat(),
+        "coletado_em": f"{referencia.isoformat()}T06:00:00-03:00",
+        "data_referencia": referencia.isoformat(),
         "fonte": coletor.URL,
         "http": {"status": 200},
-        "contagens": coletor.contagens(dados, HOJE),
+        "contagens": coletor.contagens(dados, referencia),
         "viradas": vs,
         "ncms_afetadas": coletor.ncms_afetadas(dados, vs),
     }
     catalogo = {"versao": dados.get("versao"),
-                "atualizado_em": HOJE.isoformat(),
                 "atributos": publicaveis,
                 "orgaos": coletor.orgaos(publicaveis)}
     com_pagina = {a["codigo"] for a in publicaveis}
     completo = coletor.mapa_completo(dados, com_pagina)
+    if ajustar:
+        ajustar(snapshot, catalogo, completo)
 
     dados_dir = os.path.join(destino, "dados")
     os.makedirs(os.path.join(dados_dir, "historico"), exist_ok=True)
@@ -77,12 +83,22 @@ def _monta(destino, base_path):
     g.ARQ_LASTMOD = os.path.join(dados_dir, "lastmod.json")
     try:
         # O gerador fala bastante; nos testes o que importa e o resultado.
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
             codigo = g.main()
     finally:
         for n, v in guardado.items():
             setattr(g, n, v)
     return codigo, os.path.join(destino, "site"), com_pagina
+
+
+def _le(*partes):
+    with open(os.path.join(*partes), encoding="utf-8") as f:
+        return f.read()
+
+
+def _lastmod(destino):
+    return json.loads(_le(destino, "dados", "lastmod.json"))
 
 
 def _arquivos(raiz):
@@ -113,7 +129,10 @@ class TestSiteFecha(unittest.TestCase):
         self._confere("")
 
     def _confere(self, base_path):
-        site, com_pagina = self._roda(base_path)
+        site, _ = self._roda(base_path)
+        self._confere_fechado(site, base_path)
+
+    def _confere_fechado(self, site, base_path):
         existe = _arquivos(site)
         paginas = [os.path.join(b, n)
                    for b, _, ns in os.walk(site) for n in ns
@@ -171,8 +190,124 @@ class TestSiteFecha(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(site, "404.html")))
         for nome in os.listdir(site):
             if nome.startswith("sitemap") and nome.endswith(".xml"):
-                with open(os.path.join(site, nome), encoding="utf-8") as f:
-                    self.assertNotIn("/404", f.read())
+                self.assertNotIn("/404", _le(site, nome))
+
+    def test_404_tem_noindex_e_sem_canonical(self):
+        # Pagina de erro servida em qualquer endereco ausente: um canonical
+        # fixo convidaria o Google a indexa-la como conteudo.
+        site, _ = self._roda("/repo")
+        html = _le(site, "404.html")
+        self.assertIn('<meta name="robots" content="noindex">', html)
+        self.assertNotIn('rel="canonical"', html)
+        self.assertNotIn('property="og:url"', html)
+        self.assertNotIn("{{", html)
+        # E as demais paginas continuam com os dois.
+        home = _le(site, "index.html")
+        self.assertIn('<link rel="canonical" href="https://exemplo.test/repo/">', home)
+        self.assertIn('<meta property="og:url" content="https://exemplo.test/repo/">',
+                      home)
+        self.assertNotIn("noindex", home)
+
+    def test_assinatura_nao_muda_com_os_dias(self):
+        # Mesmas viradas, outro dia de referencia: "Faltam N dias" muda no
+        # HTML, mas o lastmod da home e da NCM com virada tem de ficar.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 22))
+        primeiro = _lastmod(tmp.name)
+        home_antes = _le(tmp.name, "site", "index.html")
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 21))
+        segundo = _lastmod(tmp.name)
+        home_depois = _le(tmp.name, "site", "index.html")
+        self.assertNotEqual(home_antes, home_depois, "o HTML deveria ter mudado")
+        for caminho in ("/", "/ncm/8415.10.90/", "/ncm/8418.69.20/",
+                        "/atributos/ATT_FUTURO/"):
+            self.assertIn(caminho, primeiro)
+            self.assertEqual(primeiro[caminho], segundo[caminho], caminho)
+        self.assertEqual(primeiro, segundo)
+
+    def test_js_nao_e_alterado(self):
+        # A remocao de comentarios nao entende string nem regex de JS: o
+        # app.js e servido como esta no template.
+        site, _ = self._roda("/repo")
+        servidos = [n for n in os.listdir(site)
+                    if n.startswith("app.") and n.endswith(".js")]
+        self.assertEqual(len(servidos), 1)
+        self.assertEqual(_le(site, servidos[0]), _le(g.DIR_TEMPLATES, "app.js"))
+        folhas = [n for n in os.listdir(site) if n.startswith("estilo.")]
+        self.assertEqual(len(folhas), 1)
+        self.assertNotIn("/*", _le(site, folhas[0]))
+
+    def test_favicons_existem(self):
+        site, _ = self._roda("/repo")
+        for nome, lado in (("favicon-32.png", 32), ("apple-touch-icon.png", 180)):
+            with open(os.path.join(site, nome), "rb") as f:
+                cabeca = f.read(24)
+            self.assertEqual(cabeca[:8], b"\x89PNG\r\n\x1a\n", nome)
+            self.assertEqual(struct.unpack(">II", cabeca[16:24]), (lado, lado), nome)
+        home = _le(site, "index.html")
+        self.assertIn('<link rel="icon" href="/repo/favicon.svg" type="image/svg+xml" '
+                      'sizes="any">', home)
+        self.assertIn('href="/repo/favicon-32.png"', home)
+        self.assertIn('<link rel="apple-touch-icon" href="/repo/apple-touch-icon.png">',
+                      home)
+        self.assertIn('<meta name="theme-color" content="#1e1e1e">', home)
+        # charset antes de qualquer byte que nao seja ASCII no head.
+        self.assertLess(home.index('<meta charset="utf-8">'), home.index("<script"))
+
+    def test_versao_divergente_aborta_antes_de_apagar_o_site(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        site = os.path.join(tmp.name, "site")
+        os.makedirs(site)
+        marca = os.path.join(site, "de-ontem.html")
+        with open(marca, "w", encoding="utf-8") as f:
+            f.write("site de ontem")
+
+        def envelhece(snapshot, catalogo, completo):
+            completo["versao"] = "998"
+
+        codigo, _, _ = _monta(tmp.name, "/repo", ajustar=envelhece)
+        self.assertEqual(codigo, 1)
+        self.assertTrue(os.path.exists(marca), "site/ foi apagado apesar do erro")
+        self.assertFalse(os.path.exists(os.path.join(site, "index.html")))
+
+    def test_situacao_vazia_nao_tem_rotulo(self):
+        site, _ = self._roda("/repo")
+        raiz = os.path.join(site, "orgaos")
+        paginas = [os.path.join(b, n) for b, _, ns in os.walk(raiz)
+                   for n in ns if n.endswith(".html")]
+        self.assertTrue(paginas)
+        com_marca = sem_marca = 0
+        for caminho in paginas:
+            html = _le(caminho)
+            self.assertNotIn('data-rot="Situação"></td>', html)
+            com_marca += html.count('<td data-rot="Situação"><span class="tag muda">')
+            sem_marca += html.count("<td></td>")
+        self.assertTrue(com_marca, "nenhum atributo com virada na pagina de orgao")
+        self.assertTrue(sem_marca, "nenhuma celula vazia sem rotulo")
+
+    def test_contagem_da_home_fala_com_o_leitor_de_tela(self):
+        site, _ = self._roda("/repo")
+        home = _le(site, "index.html")
+        self.assertIn('<p class="contagem-topo"><span class="oculto">'
+                      "O próximo corte é hoje, 22/08/2026.</span>", home)
+        self.assertNotIn("aria-label=\"É hoje", home)
+        self.assertIn('<section class="captura" aria-labelledby="captura-titulo">', home)
+        self.assertIn('<h2 id="captura-titulo">', home)
+
+    def test_paginacao_e_nav_com_aria_current(self):
+        antigo = g.POR_PAGINA
+        g.POR_PAGINA = 2
+        self.addCleanup(setattr, g, "POR_PAGINA", antigo)
+        site, _ = self._roda("/repo")
+        html = _le(site, "ncm", "capitulo-84", "index.html")
+        self.assertIn('<nav class="paginacao" aria-label="Páginas do capítulo">', html)
+        self.assertIn('<a href="/repo/ncm/capitulo-84/" aria-current="page">1</a>', html)
+        self.assertIn('<a href="/repo/ncm/capitulo-84/pagina-2/">2</a>', html)
+        self.assertIn("página 1 de 2", html)
+        self.assertIn("(8415.10.90 a 8418.69.20)", html)
+        self._confere_fechado(site, "/repo")
 
     def test_geracao_e_deterministica(self):
         tmp1 = tempfile.TemporaryDirectory()
@@ -201,13 +336,9 @@ class TestSiteFecha(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         _monta(tmp.name, "/repo")
-        alvo = os.path.join(tmp.name, "dados", "lastmod.json")
-        with open(alvo, encoding="utf-8") as f:
-            primeiro = json.load(f)
+        primeiro = _lastmod(tmp.name)
         _monta(tmp.name, "/repo")
-        with open(alvo, encoding="utf-8") as f:
-            segundo = json.load(f)
-        self.assertEqual(primeiro, segundo)
+        self.assertEqual(primeiro, _lastmod(tmp.name))
 
 
 if __name__ == "__main__":

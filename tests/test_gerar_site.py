@@ -1,8 +1,11 @@
 """Testes das funcoes puras do gerador. Sem rede e sem escrever no site/."""
 
+import contextlib
+import io
 import json
 import os
 import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from datetime import date
@@ -166,7 +169,6 @@ class TestConfig(unittest.TestCase):
 
 class TestHistorico(unittest.TestCase):
     def setUp(self):
-        import tempfile
         self.tmp = tempfile.TemporaryDirectory()
         self.antigo = g.DIR_HISTORICO
         g.DIR_HISTORICO = self.tmp.name
@@ -217,6 +219,58 @@ class TestHistorico(unittest.TestCase):
         self.assertIn("Nome Legivel", html)
         self.assertNotIn("ATT_9", html)
 
+    def test_saiu_da_lista_vira_link_quando_ncm_tem_pagina(self):
+        self._grava("2026-08-21.json", json.dumps({"viradas": [
+            {"ncm": "1", "atributo": "A", "nome": "Com pagina",
+             "vira_obrigatorio_em": "2026-08-21"},
+            {"ncm": "2", "atributo": "B", "nome": "Sem pagina",
+             "vira_obrigatorio_em": "2026-08-21"}]}))
+        self._grava("2026-08-22.json", json.dumps({"viradas": [
+            {"ncm": "3", "atributo": "C", "nome": "Nova",
+             "vira_obrigatorio_em": "2099-01-01"}]}))
+        html = g.bloco_historico(CFG, date(2026, 8, 22), {"1", "3"})
+        self.assertIn('<li><a href="/repo/ncm/1/">1</a> — Com pagina</li>', html)
+        self.assertIn("<li>2 — Sem pagina</li>", html)
+        self.assertIn('<li><a href="/repo/ncm/3/">3</a> — Nova, a partir de 01/01/2099',
+                      html)
+        # Sem o conjunto, nada vira link: o site tem de continuar fechado.
+        self.assertNotIn("<a ", g.bloco_historico(CFG, date(2026, 8, 22)))
+
+    def test_schema_acima_do_suportado_e_ignorado_com_aviso(self):
+        self._grava("2026-08-21.json", json.dumps({
+            "schema": g.SCHEMA_SUPORTADO + 1,
+            "viradas": [{"ncm": "1", "atributo": "A", "nome": "N",
+                         "vira_obrigatorio_em": "2099-01-01"}]}))
+        self._grava("2026-08-22.json", json.dumps({
+            "schema": g.SCHEMA_SUPORTADO,
+            "viradas": [{"ncm": "1", "atributo": "A", "nome": "N",
+                         "vira_obrigatorio_em": "2099-01-01"}]}))
+        erro = io.StringIO()
+        with contextlib.redirect_stderr(erro):
+            html = g.bloco_historico(CFG, date(2026, 8, 22))
+        # O arquivo de ontem foi ignorado, entao a virada parece nova.
+        self.assertIn("Viradas novas", html)
+        self.assertIn("schema", erro.getvalue())
+        self.assertIn("2026-08-21.json", erro.getvalue())
+
+    def test_primeira_vista_e_a_data_mais_antiga(self):
+        virada = {"ncm": "1", "atributo": "A", "vira_obrigatorio_em": "2099-01-01"}
+        adiada = dict(virada, vira_obrigatorio_em="2099-02-01")
+        self._grava("2026-07-01.json", json.dumps({"viradas": [virada]}))
+        self._grava("2026-08-21.json", json.dumps({"viradas": [virada, adiada]}))
+        self._grava("2026-08-22.json", json.dumps({"viradas": [adiada]}))
+        self._grava("2026-08-23.json", json.dumps({"viradas": [
+            dict(virada, ncm="futuro")]}))
+        self._grava("notas.json", json.dumps({"viradas": [dict(virada, ncm="x")]}))
+        vista = g.primeira_vista(date(2026, 8, 22))
+        # Fora da janela de 30 dias, mas dentro do historico: conta.
+        self.assertEqual(vista[("1", "A", "2099-01-01")], "2026-07-01")
+        # Adiamento e chave nova.
+        self.assertEqual(vista[("1", "A", "2099-02-01")], "2026-08-21")
+        # Arquivo depois da referencia e nome que nao e data ficam de fora.
+        self.assertNotIn(("futuro", "A", "2099-01-01"), vista)
+        self.assertNotIn(("x", "A", "2099-01-01"), vista)
+
 
 class TestFeed(unittest.TestCase):
     SNAP = {"data_referencia": "2026-08-22",
@@ -226,19 +280,30 @@ class TestFeed(unittest.TestCase):
                          "vira_obrigatorio_em": "2026-08-30"}]}
 
     def setUp(self):
-        import tempfile
+        # Site e historico num diretorio temporario: o feed le o historico
+        # real se nao for desviado, e o teste deixaria de ser hermetico.
         self.tmp = tempfile.TemporaryDirectory()
-        self.antigo = g.DIR_SITE
-        g.DIR_SITE = self.tmp.name
+        self.antigo = (g.DIR_SITE, g.DIR_HISTORICO)
+        g.DIR_SITE = os.path.join(self.tmp.name, "site")
+        g.DIR_HISTORICO = os.path.join(self.tmp.name, "historico")
+        os.makedirs(g.DIR_HISTORICO)
 
     def tearDown(self):
-        g.DIR_SITE = self.antigo
+        g.DIR_SITE, g.DIR_HISTORICO = self.antigo
         self.tmp.cleanup()
+
+    def _historico(self, nome, viradas):
+        with open(os.path.join(g.DIR_HISTORICO, nome), "w", encoding="utf-8") as f:
+            json.dump({"viradas": viradas}, f)
 
     def _feed(self, snap):
         g.gerar_feed(CFG, snap)
-        with open(os.path.join(self.tmp.name, "feed.xml"), encoding="utf-8") as f:
+        with open(os.path.join(g.DIR_SITE, "feed.xml"), encoding="utf-8") as f:
             return f.read()
+
+    def _pubdates(self, xml):
+        raiz = ET.fromstring(xml)
+        return [i.findtext("pubDate") for i in raiz.findall(".//item")]
 
     def test_xml_valido(self):
         ET.fromstring(self._feed(self.SNAP))
@@ -254,6 +319,125 @@ class TestFeed(unittest.TestCase):
 
     def test_guid_estavel_entre_execucoes(self):
         self.assertEqual(self._feed(self.SNAP), self._feed(self.SNAP))
+
+    def test_feed_pubdate_vem_do_historico(self):
+        v = self.SNAP["viradas"][0]
+        self._historico("2026-08-19.json", [v])
+        self._historico("2026-08-20.json", [v])
+        self._historico("2026-08-22.json", [v])
+        xml = self._feed(self.SNAP)
+        self.assertEqual(self._pubdates(xml), ["Wed, 19 Aug 2026 00:00:00 GMT"])
+        # lastBuildDate continua sendo a data da coleta.
+        self.assertIn("<lastBuildDate>Sat, 22 Aug 2026 00:00:00 GMT</lastBuildDate>",
+                      xml)
+
+    def test_feed_pubdate_cai_para_vigencia_e_depois_para_a_coleta(self):
+        v = dict(self.SNAP["viradas"][0], vigente_desde="2026-08-10")
+        snap = dict(self.SNAP, viradas=[v])
+        self.assertEqual(self._pubdates(self._feed(snap)),
+                         ["Mon, 10 Aug 2026 00:00:00 GMT"])
+        # vigente_desde vem cru do arquivo oficial: lixo nao vira pubDate.
+        v["vigente_desde"] = "10/08/2026"
+        self.assertEqual(self._pubdates(self._feed(snap)),
+                         ["Sat, 22 Aug 2026 00:00:00 GMT"])
+        # Um adiamento e uma chave nova: o historico da data antiga nao vale.
+        self._historico("2026-08-01.json", [dict(v, vira_obrigatorio_em="2026-09-30")])
+        self.assertEqual(self._pubdates(self._feed(snap)),
+                         ["Sat, 22 Aug 2026 00:00:00 GMT"])
+
+
+class TestLastmod(unittest.TestCase):
+    def test_calcular_lastmod_mantem_data_quando_hash_igual(self):
+        anterior = {"/": ["aaa", "2026-08-01"], "/ncm/1/": ["bbb", "2026-08-02"],
+                    "/sumiu/": ["ccc", "2026-08-03"], "/quebrado/": "lixo"}
+        paginas = {"/": "aaa", "/ncm/1/": "novo", "/nova/": "ddd", "/quebrado/": "eee"}
+        atual, mudadas = g.calcular_lastmod(anterior, paginas, "2026-08-22")
+        self.assertEqual(atual, {
+            "/": ["aaa", "2026-08-01"],
+            "/ncm/1/": ["novo", "2026-08-22"],
+            "/nova/": ["ddd", "2026-08-22"],
+            "/quebrado/": ["eee", "2026-08-22"],
+        })
+        self.assertEqual(sorted(mudadas), ["/ncm/1/", "/nova/", "/quebrado/"])
+        # Pura: nao toca no mapa anterior.
+        self.assertIn("/sumiu/", anterior)
+
+    def test_assinatura_por_dados_ignora_a_ordem_das_chaves(self):
+        a = g.assinatura_dados("t", "d", {"b": 1, "a": [{"y": 2, "x": 1}]})
+        b = g.assinatura_dados("t", "d", {"a": [{"x": 1, "y": 2}], "b": 1})
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, g.assinatura_dados("t", "d", {"a": [], "b": 1}))
+
+    def test_virada_estavel_nao_carrega_nada_derivado_do_dia(self):
+        v = {"ncm": "1", "atributo": "A", "nome": "N", "orgaos": ["X"],
+             "vira_obrigatorio_em": "2099-01-01", "vigente_desde": "2020-01-01",
+             "modalidade": "IMPORTACAO", "forma_preenchimento": "TEXTO"}
+        self.assertEqual(set(g.virada_estavel(v)),
+                         {"ncm", "atributo", "nome", "orgaos", "vira_obrigatorio_em"})
+
+
+class TestSitemap(unittest.TestCase):
+    SNAP = {"data_referencia": "2026-08-22", "contagens": {"versao": "1"}}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.antigo = g.DIR_SITE
+        g.DIR_SITE = self.tmp.name
+
+    def tearDown(self):
+        g.DIR_SITE = self.antigo
+        self.tmp.cleanup()
+
+    def _le(self, nome):
+        with open(os.path.join(self.tmp.name, nome), encoding="utf-8") as f:
+            return f.read()
+
+    def test_sitemap_index_lastmod_e_o_maximo_do_bloco(self):
+        caminhos = ["/", "/ncm/a/", "/ncm/b/", "/atributos/x/"]
+        datas = {"/": ["h", "2026-08-01"], "/ncm/a/": ["h", "2026-08-10"],
+                 "/ncm/b/": ["h", "2026-08-05"]}
+        g.gerar_sitemap(CFG, caminhos, self.SNAP, datas, ["/ncm/a/"])
+        indice = ET.fromstring(self._le("sitemap.xml"))
+        ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        por_arquivo = {e.findtext("s:loc", namespaces=ns).rsplit("/", 1)[1]:
+                       e.findtext("s:lastmod", namespaces=ns)
+                       for e in indice.findall("s:sitemap", ns)}
+        self.assertEqual(por_arquivo, {
+            "sitemap-ncm.xml": "2026-08-10",
+            "sitemap-geral.xml": "2026-08-01",
+            # Sem registro no mapa, a URL leva a data de hoje.
+            "sitemap-atributos.xml": "2026-08-22",
+        })
+        self.assertEqual(self._le("mudancas.txt"),
+                         "https://exemplo.test/repo/ncm/a/\n")
+
+    def test_rebuild_acima_do_teto_manda_uma_url_so(self):
+        caminhos = [f"/ncm/{i}/" for i in range(g.TETO_INDEXNOW + 1)]
+        g.gerar_sitemap(CFG, caminhos, self.SNAP, {}, list(caminhos))
+        self.assertEqual(self._le("mudancas.txt").count("\n"), 1)
+
+
+class TestPagina(unittest.TestCase):
+    SNAP = {"data_referencia": "2026-08-22", "contagens": {"versao": "1"}}
+
+    def test_sem_caminho_sai_noindex_e_sem_canonical(self):
+        html = g.pagina(CFG, self.SNAP, "<p>x</p>", "T", "D", caminho=None)
+        self.assertIn('<meta name="robots" content="noindex">', html)
+        self.assertNotIn("canonical", html)
+        self.assertNotIn("og:url", html)
+        self.assertNotIn("{{", html)
+
+    def test_com_caminho_sai_canonical_e_og_url(self):
+        html = g.pagina(CFG, self.SNAP, "<p>x</p>", "T", "D", "/ncm/1/")
+        self.assertIn('<link rel="canonical" href="https://exemplo.test/repo/ncm/1/">',
+                      html)
+        self.assertIn('<meta property="og:url" content="https://exemplo.test/repo/ncm/1/">',
+                      html)
+        self.assertNotIn("noindex", html)
+
+    def test_goatcounter_por_https(self):
+        bloco = g.bloco_analytics(dict(CFG, goatcounter_code="x"))
+        self.assertIn('src="https://gc.zgo.at/count.js"', bloco)
 
 
 class TestPng(unittest.TestCase):

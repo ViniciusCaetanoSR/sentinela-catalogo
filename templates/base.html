@@ -1,22 +1,25 @@
 <!doctype html>
 <html lang="pt-BR" class="no-js">
 <head>
-<script>document.documentElement.className="js"</script>
 <meta charset="utf-8">
+<script>document.documentElement.className="js"</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{titulo}}</title>
 <meta name="description" content="{{descricao}}">
-<link rel="canonical" href="{{canonical}}">
+{{canonicos}}{{meta_extra}}
 <link rel="alternate" type="application/rss+xml" title="Viradas de atributo por NCM" href="{{base}}/feed.xml">
 <meta property="og:title" content="{{titulo}}">
 <meta property="og:description" content="{{descricao}}">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="pt_BR">
 <meta property="og:site_name" content="Sentinela do Catálogo">
-<meta property="og:url" content="{{canonical}}">
 <meta property="og:image" content="{{og_imagem}}">
 <meta name="twitter:card" content="summary_large_image">
-<link rel="icon" href="{{base}}/favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#1e1e1e">
+<meta name="color-scheme" content="only light">
+<link rel="icon" href="{{base}}/favicon.svg" type="image/svg+xml" sizes="any">
+<link rel="icon" href="{{base}}/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="{{base}}/apple-touch-icon.png">
 <link rel="preload" href="{{base}}/fontes/figtree-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="{{base}}/fontes/jetbrainsmono-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{{base}}/fontes/fontes.css">
@@ -43,11 +46,11 @@
 {{trilha}}
 {{conteudo}}
 
-<div class="captura">
-  <h2>Receba o aviso das suas NCMs por e-mail</h2>
+<section class="captura" aria-labelledby="captura-titulo">
+  <h2 id="captura-titulo">Receba o aviso das suas NCMs por e-mail</h2>
   <p>Você informa as NCMs que mantém no catálogo. Quando um atributo delas ganhar data para virar obrigatório, você recebe o aviso — com a lista, não com o texto da notícia.</p>
   {{formulario}}
-</div>
+</section>
 
 <div class="fonte">
   Fonte: <a href="https://portalunico.siscomex.gov.br/cadatributos/api/atributo-ncm/download/json?perfil=PUBLICO">relação oficial de atributos por NCM</a>, publicada pelo Portal Único de Comércio Exterior (Receita Federal). Coleta automática em {{coletado_em}}, versão {{versao}} do arquivo.<br>
