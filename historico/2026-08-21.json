@@ -1,0 +1,745 @@
+{
+ "coletado_em": "2026-08-21T23:19:47-03:00",
+ "data_referencia": "2026-08-21",
+ "fonte": "https://portalunico.siscomex.gov.br/cadatributos/api/atributo-ncm/download/json?perfil=PUBLICO",
+ "http": {
+  "status": 200,
+  "content_type": "application/zip",
+  "bytes_zip": 493446,
+  "disposition": "attachment; filename=\"ATRIBUTOS_2026_08_21.zip\"",
+  "arquivo_interno": "ATRIBUTOS_POR_NCM_2026_08_21.json",
+  "bytes_json": 16573134,
+  "sha256_json": "5886c24f7ec67e469abc463d4b9a63af661a0fd0cb563a2bcf15b802ddccb55a"
+ },
+ "contagens": {
+  "versao": "346",
+  "ncms": 10571,
+  "ncms_sem_atributo": 55,
+  "atributos_distintos": 1311,
+  "detalhes_atributos": 1311,
+  "vinculos": 73248,
+  "obrigatorios": 15080,
+  "com_fim_vigencia": 14,
+  "inicio_vigencia_futuro": 0
+ },
+ "viradas": [
+  {
+   "ncm": "8415.10.90",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8415.10.90",
+   "atributo": "ATT_17220",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8418.69.20",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8418.69.20",
+   "atributo": "ATT_17280",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8418.69.91",
+   "atributo": "ATT_17300",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8436.21.00",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8436.21.00",
+   "atributo": "ATT_17301",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8436.29.00",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8436.29.00",
+   "atributo": "ATT_17301",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8504.21.00",
+   "atributo": "ATT_13241",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8544.42.00",
+   "atributo": "ATT_13241",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8609.00.00",
+   "atributo": "ATT_13200",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8609.00.00",
+   "atributo": "ATT_17200",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação",
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  {
+   "ncm": "8504.40.10",
+   "atributo": "ATT_13241",
+   "vira_obrigatorio_em": "2026-09-13",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação",
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  }
+ ],
+ "ncms_afetadas": [
+  {
+   "ncm": "8415.10.90",
+   "atributos": [
+    {
+     "codigo": "ATT_13240",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_17220",
+     "nome": "Detalhamento",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8418.69.20",
+   "atributos": [
+    {
+     "codigo": "ATT_13240",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_17280",
+     "nome": "Detalhamento",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8418.69.91",
+   "atributos": [
+    {
+     "codigo": "ATT_17300",
+     "nome": "Detalhamento",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_13240",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8436.21.00",
+   "atributos": [
+    {
+     "codigo": "ATT_13240",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_17301",
+     "nome": "Detalhamento",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8436.29.00",
+   "atributos": [
+    {
+     "codigo": "ATT_13240",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_17301",
+     "nome": "Detalhamento",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8504.21.00",
+   "atributos": [
+    {
+     "codigo": "ATT_13241",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_13200",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_2548",
+     "nome": "Destaque LI",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8504.40.10",
+   "atributos": [
+    {
+     "codigo": "ATT_13241",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-09-13"
+    },
+    {
+     "codigo": "ATT_13200",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_13900",
+     "nome": "Detalhamento",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8544.42.00",
+   "atributos": [
+    {
+     "codigo": "ATT_13241",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_13200",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_13860",
+     "nome": "Detalhamento",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14545",
+     "nome": "Categoria de produto - Catálogo Anvisa",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14783",
+     "nome": "Finalidade da importação - Anvisa",
+     "obrigatorio": true,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14520",
+     "nome": "CNPJ / CPF Destino final",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "MAPA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14780",
+     "nome": "Critério de priorização - Anvisa",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14781",
+     "nome": "CNPJ destinatário ensaio de proficiência",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14782",
+     "nome": "CNPJ provedor do ensaio de proficiência",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14785",
+     "nome": "Dispositivo médico recondicionado",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_14786",
+     "nome": "Data de fabricação do bem/produto Anvisa",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_9332",
+     "nome": "Número do Lote",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "MAPA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  },
+  {
+   "ncm": "8609.00.00",
+   "atributos": [
+    {
+     "codigo": "ATT_13200",
+     "nome": "Referência de licenciamento Inmetro",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_17200",
+     "nome": "Detalhamento",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "INMETRO"
+     ],
+     "vira_obrigatorio_em": "2026-08-30"
+    },
+    {
+     "codigo": "ATT_10888",
+     "nome": "Número de série",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "ANVISA",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    },
+    {
+     "codigo": "ATT_15540",
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "obrigatorio": false,
+     "modalidade": "Importação",
+     "orgaos": [
+      "CONFAZ",
+      "RECEITA"
+     ],
+     "vira_obrigatorio_em": null
+    }
+   ]
+  }
+ ],
+ "catalogo_reescrito": true,
+ "atributos_publicaveis": 888,
+ "orgaos": 16
+}

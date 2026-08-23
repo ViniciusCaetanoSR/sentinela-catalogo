@@ -1,0 +1,199 @@
+{
+ "schema": 2,
+ "coletado_em": "2026-08-23T09:42:11-03:00",
+ "data_referencia": "2026-08-23",
+ "fonte": "https://portalunico.siscomex.gov.br/cadatributos/api/atributo-ncm/download/json?perfil=PUBLICO",
+ "http": {
+  "status": 200,
+  "content_type": "application/zip",
+  "bytes_zip": 493446,
+  "disposition": "attachment; filename=\"ATRIBUTOS_2026_08_23.zip\"",
+  "arquivo_interno": "ATRIBUTOS_POR_NCM_2026_08_23.json",
+  "bytes_json": 16573134,
+  "sha256_json": "5886c24f7ec67e469abc463d4b9a63af661a0fd0cb563a2bcf15b802ddccb55a",
+  "arquivo_do_dia": true
+ },
+ "contagens": {
+  "versao": "346",
+  "ncms": 10571,
+  "ncms_sem_atributo": 55,
+  "atributos_distintos": 1311,
+  "detalhes_atributos": 1311,
+  "vinculos": 73248,
+  "descartados": 0,
+  "obrigatorios": 15080,
+  "obrigatorio_nao_booleano": 0,
+  "com_fim_vigencia": 14,
+  "com_fim_vigencia_futuro": 14,
+  "fim_vigencia_passado_opcional": 0,
+  "datas_invalidas": 0,
+  "inicio_vigencia_futuro": 0
+ },
+ "invariantes_falhas": [],
+ "datas_invalidas_amostra": [],
+ "vencidos_opcionais_amostra": [],
+ "portao_ignorado": false,
+ "conteudo_identico": true,
+ "bruto_novo": false,
+ "viradas": [
+  {
+   "ncm": "8415.10.90",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8415.10.90",
+   "atributo": "ATT_17220",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8418.69.20",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8418.69.20",
+   "atributo": "ATT_17280",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8418.69.91",
+   "atributo": "ATT_17300",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8436.21.00",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8436.21.00",
+   "atributo": "ATT_17301",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8436.29.00",
+   "atributo": "ATT_13240",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8436.29.00",
+   "atributo": "ATT_17301",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8504.21.00",
+   "atributo": "ATT_13241",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8544.42.00",
+   "atributo": "ATT_13241",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8609.00.00",
+   "atributo": "ATT_13200",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8609.00.00",
+   "atributo": "ATT_17200",
+   "vira_obrigatorio_em": "2026-08-30",
+   "vigente_desde": "2026-08-01",
+   "modalidade": "Importação"
+  },
+  {
+   "ncm": "8504.40.10",
+   "atributo": "ATT_13241",
+   "vira_obrigatorio_em": "2026-09-13",
+   "vigente_desde": "2026-08-19",
+   "modalidade": "Importação"
+  }
+ ],
+ "atributos": {
+  "ATT_13200": {
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  "ATT_13240": {
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  "ATT_13241": {
+   "nome": "Referência de licenciamento Inmetro",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  "ATT_17200": {
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  "ATT_17220": {
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  "ATT_17280": {
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  "ATT_17300": {
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  },
+  "ATT_17301": {
+   "nome": "Detalhamento",
+   "orgaos": [
+    "INMETRO"
+   ],
+   "forma_preenchimento": "LISTA_ESTATICA"
+  }
+ },
+ "catalogo_reescrito": true,
+ "atributos_publicaveis": 391,
+ "orgaos": 17
+}

@@ -1,0 +1,7 @@
+# Esta branch é só o estado do bot: a raiz é o que em main vive em dados/.
+# Derivados e grandes, nunca versionados (em main são dados/completo.json
+# e dados/bruto.zip, cobertos pelo .gitignore de lá).
+completo.json
+bruto.zip
+*.zip
+*.tmp

@@ -1,0 +1,5 @@
+* text=auto eol=lf
+# JSON escrito por máquina: fora do diff e fora da barra de linguagens.
+* linguist-generated=true
+atributos.json -diff
+lastmod.json -diff
