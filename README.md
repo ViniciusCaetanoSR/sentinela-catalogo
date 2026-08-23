@@ -67,7 +67,7 @@ python coletor.py                         # baixa o ZIP oficial e apura (bate na
 python coletor.py --de-arquivo bruto.zip  # apura um ZIP já baixado — sem rede
 python gerar_site.py                      # gera site/ a partir de dados/ — sem rede
 python servir.py                          # http://localhost:8000/sentinela-catalogo/
-python -m unittest discover -s tests -v   # ~300 testes em cerca de 4 s, sem rede
+python -m unittest discover -s tests -v   # ~360 testes em cerca de 7 s, sem rede
 ```
 
 Os dois scripts principais aceitam argumentos para não tocar no `dados/` e no `site/` do repositório:
@@ -219,6 +219,23 @@ Cada snapshot declara o `schema` do seu formato (`coletor.SCHEMA`, hoje **2**). 
 
 Com domínio próprio, deixe `base_path` vazio e preencha `dominio`. Isso também é o que faz o `robots.txt` funcionar: em Pages de projeto ele é servido sob `/<repo>/robots.txt`, e crawler só lê na raiz da origem — que pertence à GitHub, não a você.
 
+## Depois dos 60 dias
+
+O teste acaba por volta de 2026-10-19, e o critério de continuidade está no hub do projeto — não é ele que está escrito aqui. O que está são as consequências operacionais de cada desfecho, que são fato deste repositório.
+
+**Se passar**, o que existe hoje ainda não é produto: é um protótipo honesto que publica todo dia. Quatro coisas precisam existir antes de chamá-lo de outra coisa.
+
+- **Aviso por e-mail de verdade, no lugar do `mailto:`.** Hoje a captura é um link que abre o cliente de e-mail de quem lê, com as NCMs dele na mensagem, e alguém do outro lado responde à mão. Não há lista, não há envio, não há cancelamento. O aviso de verdade precisa guardar quem assinou e quais NCMs — dado de terceiro, que não pode viver no git de um repositório público nem no log de uma Action — e disparar no fim da coleta, com saída da lista em um clique. É a única peça que quebra o "sem servidor, sem banco", e por isso ela é uma decisão, não um detalhe.
+- **Domínio próprio.** Preencher `dominio`, esvaziar `base_path`: o gerador já grava o `CNAME`, todo link interno perde o prefixo, o `robots.txt` passa a ser servido na raiz da origem (em Pages de projeto ele fica sob `/<repo>/`, onde crawler nenhum procura) e o `keyLocation` do IndexNow acompanha. O custo é uma migração de URL: canonical, sitemap e feed trocam de host de uma vez, e o que já estava indexado precisa ser reencontrado.
+- **API estática em `site/dados/`.** `viradas.json` e `viradas.csv` já são uma API sem servidor — o que falta é a promessa: documentar os campos, versionar o formato (o snapshot já carrega `schema`), publicar também o histórico e não mexer no que alguém passou a consumir. Enquanto for "um arquivo que o build deixa ali", é cortesia, não contrato.
+- **Cadência de manutenção.** Coletar, publicar, avisar e vigiar já é tudo do bot. O que sobra para uma pessoa é pouco e precisa de dono: olhar a issue `coleta-falhou` quando ela abre (a de resgate do mesmo dia fecha sozinha as que se resolvem), mergear o Dependabot e reagir quando a Receita mexer no formato — o portão de sanidade e a validação de forma são o que fica vermelho primeiro, de propósito. Cada mudança sai como versão, pelo ritual de [CONTRIBUTING.md](CONTRIBUTING.md#publicar-uma-versão).
+
+**Se não passar**, nada explode: o desligamento é ordenado, e o acervo sobrevive a ele.
+
+- **O cron sai do ar.** Desativar *Coletar e publicar* e *Vigia* na aba *Actions* (ou tirar o `schedule` dos dois). O vigia tem de cair junto com a coleta: sozinho, ele abre uma issue dizendo que o dado envelheceu e comenta nela todo dia — que passou a ser exatamente o combinado. Pelo mesmo motivo, pause o check no healthchecks.io, senão o monitor externo reclama todo dia, para sempre. O GitHub também desativa cron sozinho depois de 60 dias sem commit no repositório: o efeito é o mesmo, só que a data não é sua.
+- **O repositório fica público e legível.** Código sob MIT, dados públicos. `dados/historico/` guarda um snapshot por dia coletado, e as releases `bruto-<versao>` guardam o ZIP oficial de cada versão do arquivo — de onde qualquer pessoa reapura tudo com `python coletor.py --de-arquivo`, sem depender de um endpoint que não serve o passado. Esse acervo é a parte que continua útil com o site fora do ar, e é a razão de o histórico existir desde o primeiro dia.
+- **O site sai do ar, ou congela com aviso.** Desligar o Pages transforma as ~11 mil URLs indexadas em 404 de uma vez. Congelar não custa nada e é mais honesto: o último build continua servido e, como toda página carrega `data-referencia`, a faixa de dado velho aparece sozinha no navegador de quem chegar — o site passa a dizer de quando ele é sem ninguém escrever nada. Para congelar de propósito, vale um build final com o aviso no topo e sem a captura, que a essa altura não coleta mais nada.
+
 ## Fonte
 
 <https://portalunico.siscomex.gov.br/cadatributos/api/atributo-ncm/download/json?perfil=PUBLICO> — Receita Federal, público, sem autenticação.
@@ -227,7 +244,7 @@ Projeto independente, sem vínculo com a Receita Federal ou com o Portal Único.
 
 ## Contribuir e segurança
 
-Regras de código, testes e branches em [CONTRIBUTING.md](CONTRIBUTING.md). Para relatar um problema de segurança, [SECURITY.md](SECURITY.md).
+Regras de código, testes, branches e como publicar uma versão em [CONTRIBUTING.md](CONTRIBUTING.md); o que mudou em cada uma, em [CHANGELOG.md](CHANGELOG.md). Para relatar um problema de segurança, [SECURITY.md](SECURITY.md).
 
 ## Licença
 

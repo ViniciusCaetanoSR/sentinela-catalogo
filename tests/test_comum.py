@@ -1,10 +1,11 @@
-"""Testes de comum.py: caminhos, escrita atômica e config.json."""
+"""Testes de comum.py: caminhos, escrita atômica, config.json e versão."""
 
 import contextlib
 import dataclasses
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -190,6 +191,40 @@ class TestUrls(unittest.TestCase):
         self.assertEqual(comum.url(self.CFG, "/x/"), "/repo/x/")
         self.assertEqual(comum.absoluta(self.CFG, "/x/"), "https://e.test/repo/x/")
         self.assertEqual(comum.absoluta({}, "/x/"), "/x/")
+
+
+class TestVersao(unittest.TestCase):
+    """__version__ é a versão do projeto; os outros dois lugares a repetem.
+
+    Uma tag `vX.Y.Z` sem entrada no CHANGELOG é uma versão que ninguém
+    consegue ler depois, e um pyproject atrasado faz o pacote se apresentar
+    com um número que não é o do User-Agent que bate na Receita. Nenhum dos
+    dois quebra nada na hora: quebram meses depois, na hora de entender o
+    que estava no ar. Daí o teste.
+    """
+
+    def _ler(self, nome):
+        with open(os.path.join(comum.RAIZ, nome), encoding="utf-8") as f:
+            return f.read()
+
+    def test_a_versao_encabeca_o_changelog(self):
+        versoes = re.findall(r"^## (\d+\.\d+\.\d+)\b", self._ler("CHANGELOG.md"), re.M)
+        self.assertTrue(versoes, "CHANGELOG.md sem nenhuma entrada de versão")
+        self.assertEqual(
+            versoes[0],
+            comum.__version__,
+            "a primeira entrada do CHANGELOG.md tem de ser a versão de "
+            "comum.__version__ (a mais nova em cima)",
+        )
+
+    def test_o_pyproject_declara_a_mesma_versao(self):
+        # tomllib é 3.11+; uma linha de regex serve para um arquivo que o
+        # runtime nunca lê.
+        declarada = re.search(
+            r'^version = "(\d+\.\d+\.\d+)"', self._ler("pyproject.toml"), re.M
+        )
+        self.assertIsNotNone(declarada, "pyproject.toml sem version")
+        self.assertEqual(declarada.group(1), comum.__version__)
 
 
 if __name__ == "__main__":
