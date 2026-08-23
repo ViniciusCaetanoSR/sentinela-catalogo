@@ -62,6 +62,12 @@
       ]
     },
     {
+      "codigoNcm": "3004.90.99",
+      "listaAtributos": [
+        {"codigo": "ATT_HOSTIL", "obrigatorio": false, "modalidade": "IMPORTACAO", "dataFimVigencia": "2099-12-31", "dataInicioVigencia": "2021-01-01"}
+      ]
+    },
+    {
       "codigoNcm": "9999.99.99",
       "listaAtributos": []
     },
@@ -178,6 +184,18 @@
       "formaPreenchimento": "TEXTO",
       "orgaos": ["DPF"],
       "dominio": []
+    },
+    {
+      "codigo": "ATT_HOSTIL",
+      "nomeApresentacao": "Tes<te> \"x\" & 'y'",
+      "definicao": "Definição hostil: </script><script>alert(1)</script> e segue.",
+      "orientacaoPreenchimento": "Preencha {{formulario}} conforme a nota <fiscal>.",
+      "formaPreenchimento": "LISTA_ESTATICA",
+      "orgaos": ["ÓRGÃO <B>"],
+      "dominio": [
+        {"codigo": "<1", "descricao": "Opção com < no texto"},
+        {"codigo": "02", "descricao": "Opção comum"}
+      ]
     },
     {
       "codigo": "",

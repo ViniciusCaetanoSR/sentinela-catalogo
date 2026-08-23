@@ -7,6 +7,7 @@ cortar um atributo sem parar de linkar para ele quebraria o site em silencio.
 
 import contextlib
 import csv
+import html.parser
 import io
 import json
 import os
@@ -15,7 +16,9 @@ import struct
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from datetime import date
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -29,22 +32,48 @@ HOJE = date(2026, 8, 22)
 # e sem JS é para lá que o envio vai.
 RE_LINK = re.compile(r'(?:href|src|action)="([^"]+)"')
 EXTERNO = ("http://", "https://", "mailto:", "//", "#", "data:")
+NS_SITEMAP = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+
+def _chaves_dos_templates():
+    """As {{chaves}} que existem nos templates reais, extraídas por regex.
+
+    É contra ESTAS que a saída é conferida - não contra qualquer "{{": um
+    "{{" que venha do arquivo oficial (ATT_HOSTIL carrega um na
+    orientação) é dado, e tem de sair intacto, escapado como texto.
+    """
+    chaves = set()
+    pasta = comum.padrao().templates
+    for nome in os.listdir(pasta):
+        if nome.endswith(".html"):
+            with open(os.path.join(pasta, nome), encoding="utf-8") as f:
+                chaves |= set(g.RE_CHAVE.findall(f.read()))
+    return chaves
+
+
+CHAVES_TEMPLATES = _chaves_dos_templates()
+# O único "{{chave}}" que a fixture carrega de propósito, e onde ele pousa:
+# a orientação de ATT_HOSTIL diz "{{formulario}}", e ela só é mostrada na
+# página do próprio atributo. Em qualquer outra página, ou mais de uma vez
+# nesta, é placeholder que ficou sem preencher.
+CHAVES_TOLERADAS = {("/atributos/ATT_HOSTIL/", "formulario"): 1}
 
 
 def setUpModule():
     apoio.proibir_rede()
 
 
-def _monta(destino, base_path, referencia=HOJE, ajustar=None, dados=None):
+def _monta(destino, base_path, referencia=HOJE, ajustar=None, dados=None, cfg=None):
     """Roda coletor (sem rede) e gerador contra um diretorio temporario.
 
     Os dados saem de apurar() + gravar(), o mesmo caminho da producao; o
     gerador roda pela main(), com --raiz, como o workflow o chama.
     ajustar(snapshot, catalogo, completo) roda antes da gravacao, para os
     testes que precisam de um dado deliberadamente errado; `dados` troca a
-    amostra por outro JSON (a fixture do modo lote, montada em memoria).
+    amostra por outro JSON (a fixture do modo lote, montada em memoria);
+    `cfg` acrescenta chaves ao config.json do ambiente.
     """
-    with apoio.ambiente(destino, {"base_path": base_path}) as caminhos:
+    with apoio.ambiente(destino, dict(cfg or {}, base_path=base_path)) as caminhos:
         apuracao = apoio.montar_dados(
             caminhos, dados if dados is not None else apoio.amostra(), referencia, ajustar
         )
@@ -64,6 +93,11 @@ def _le(*partes):
 
 def _lastmod(destino):
     return json.loads(_le(destino, "dados", "lastmod.json"))
+
+
+def _paginas_do_lastmod(lastmod):
+    """[(caminho, [hash, data])] sem a chave de metadado dos templates."""
+    return [(c, r) for c, r in lastmod.items() if not c.startswith("__")]
 
 
 def _tbody(html):
@@ -115,15 +149,27 @@ class TestSiteFecha(unittest.TestCase):
         for caminho in paginas:
             with open(caminho, encoding="utf-8") as f:
                 html = f.read()
-            if "{{" in html:
-                placeholders.append(caminho)
+            publicado = g.caminho_publicado(os.path.relpath(caminho, site))
+            # Só as chaves que os templates têm: um "{{" vindo do dado
+            # oficial não é erro. E a contagem é exata - a orientação de
+            # ATT_HOSTIL carrega um "{{formulario}}" que tem de aparecer
+            # UMA vez na página dele, e nenhuma nas outras.
+            for chave in CHAVES_TEMPLATES:
+                marcador = "{{" + chave + "}}"
+                esperado = CHAVES_TOLERADAS.get((publicado, chave), 0)
+                if html.count(marcador) != esperado:
+                    placeholders.append((caminho, marcador))
             for alvo in RE_LINK.findall(html):
                 if alvo.startswith(EXTERNO):
                     continue
                 if base_path and not alvo.startswith(base_path):
                     sem_prefixo.append((caminho, alvo))
                     continue
-                local = alvo[len(base_path) :].split("#")[0] if base_path else alvo
+                # O fragmento e a query saem nos dois casos: sem base_path um
+                # "/x/#y" também precisa resolver para "/x/". A query aparece
+                # no action do formulário de busca de NCM, que cai em /ncm/.
+                local = alvo[len(base_path) :] if base_path else alvo
+                local = local.split("#")[0].split("?")[0]
                 if local not in existe:
                     quebrados.append((caminho, alvo))
 
@@ -181,9 +227,11 @@ class TestSiteFecha(unittest.TestCase):
         self.assertIn('<meta property="og:url" content="https://exemplo.test/repo/">', home)
         self.assertNotIn("noindex", home)
 
-    def test_assinatura_nao_muda_com_os_dias(self):
+    def test_paginas_com_virada_nao_mudam_de_hash_entre_dias(self):
         # Mesmas viradas, outro dia de referencia: "Faltam N dias" muda no
         # HTML, mas o lastmod da home e da NCM com virada tem de ficar.
+        # (Dia 21, não 23: no 23 ATT_HOJE já venceu e o conteúdo muda de
+        # verdade - esse caso é o de test_lastmod_carimba_so_o_que_mudou.)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         _monta(tmp.name, "/repo", referencia=date(2026, 8, 22))
@@ -198,10 +246,71 @@ class TestSiteFecha(unittest.TestCase):
             "/ncm/8415.10.90/",
             "/ncm/8418.69.20/",
             "/atributos/ATT_FUTURO/",
+            "/atributos/ATT_HOSTIL/",
         ):
             self.assertIn(caminho, primeiro)
             self.assertEqual(primeiro[caminho], segundo[caminho], caminho)
         self.assertEqual(primeiro, segundo)
+        self.assertEqual(_le(tmp.name, "site", "mudancas.txt"), "")
+
+    # O que muda de um dia para o outro SEM mudança de dado: ATT_HOJE vira
+    # em 22/08 e no dia 23 é prazo vencido. Isso toca a NCM dele, a página
+    # dele (perde o aviso de virada), o índice de atributos e a página do
+    # INMETRO (ele sai de "com virada agendada"), o capítulo 84 (a marca
+    # "virada" da NCM some) e a home (a tabela e o "saiu da lista").
+    VENCIMENTO_DE_ATT_HOJE = {
+        "/",
+        "/ncm/8418.69.20/",
+        "/ncm/capitulo-84/",
+        "/atributos/",
+        "/atributos/ATT_HOJE/",
+        "/orgaos/inmetro/",
+    }
+
+    def test_lastmod_carimba_so_o_que_mudou(self):
+        # Dia 22; dia 23 com o mesmo dado (só o calendário andou); dia 24 com
+        # a data de ATT_FUTURO adiada na fixture em memória. Cada passo
+        # carimba data nova SÓ nas páginas cujo dado mudou, e mudancas.txt
+        # lista exatamente elas.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 22))
+        dia22 = _lastmod(tmp.name)
+
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 23))
+        dia23 = _lastmod(tmp.name)
+        mudadas = {c for c, (_, d) in _paginas_do_lastmod(dia23) if d == "2026-08-23"}
+        self.assertEqual(mudadas, self.VENCIMENTO_DE_ATT_HOJE)
+        self.assertEqual(
+            set(_le(tmp.name, "site", "mudancas.txt").splitlines()),
+            {"https://exemplo.test/repo" + c for c in self.VENCIMENTO_DE_ATT_HOJE},
+        )
+
+        dados = apoio.amostra()
+        for ncm in dados["listaNcm"]:
+            for v in ncm.get("listaAtributos") or []:
+                if v.get("codigo") == "ATT_FUTURO":
+                    v["dataFimVigencia"] = "2099-06-30"
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 24), dados=dados)
+        dia24 = _lastmod(tmp.name)
+        afetadas = {"/", "/ncm/8415.10.90/", "/atributos/ATT_FUTURO/"}
+        for caminho, (marca, data) in _paginas_do_lastmod(dia24):
+            if caminho in afetadas:
+                self.assertEqual(data, "2026-08-24", caminho)
+                self.assertNotEqual(marca, dia23[caminho][0], caminho)
+            else:
+                self.assertEqual(dia24[caminho], dia23[caminho], caminho)
+        # O conjunto de páginas é o mesmo: nada entrou nem saiu.
+        self.assertEqual(set(dia24), set(dia23))
+        self.assertEqual(
+            sorted(_le(tmp.name, "site", "mudancas.txt").splitlines()),
+            sorted("https://exemplo.test/repo" + c for c in afetadas),
+        )
+        # E a página intocada continua com a data do primeiro dia.
+        self.assertEqual(dia24["/ncm/8703.10.00/"][1], "2026-08-22")
+        self.assertEqual(dia24["/ncm/8703.10.00/"], dia22["/ncm/8703.10.00/"])
+        self.assertEqual(dia24["/privacidade/"], dia22["/privacidade/"])
+        self.assertIn("de 31/12/2099 para 30/06/2099", _le(tmp.name, "site", "index.html"))
 
     def test_js_nao_e_alterado(self):
         # A remocao de comentarios nao entende string nem regex de JS: o
@@ -306,7 +415,7 @@ class TestSiteFecha(unittest.TestCase):
         site, _ = self._roda("/repo")
         home = _le(site, "index.html")
         self.assertIn(
-            "<h1>2 atributos de NCM viram obrigatórios "
+            "<h1>3 atributos de NCM viram obrigatórios "
             '<span data-corte="2026-08-22" data-estilo="h1">hoje</span></h1>',
             home,
         )
@@ -527,6 +636,119 @@ class TestSiteFecha(unittest.TestCase):
         )
         self._confere_fechado(os.path.join(tmp.name, "site"), "/repo")
 
+    def _locs(self, site, nome):
+        """As URLs de um sitemap (índice ou bloco), já sem base_url+base_path."""
+        raiz = ET.fromstring(_le(site, nome))
+        locs = [
+            e.text for e in raiz.iter("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
+        ]
+        self.assertTrue(locs, nome)
+        for loc in locs:
+            self.assertTrue(loc.startswith("https://exemplo.test/repo/"), loc)
+        for quando in raiz.iter("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod"):
+            self.assertRegex(quando.text, r"^\d{4}-\d{2}-\d{2}$")
+        return [loc[len("https://exemplo.test/repo") :] for loc in locs]
+
+    def test_paginacao_e_sitemaps_divididos_fecham(self):
+        # Com 400 NCMs por página e 5 mil URLs por sitemap a fixture nunca
+        # divide nada. Aqui 2 e 3: o capítulo 84 (3 NCMs) pagina, os 10
+        # NCMs viram 4 blocos de sitemap, e o site tem de continuar fechado
+        # - toda <loc> do índice e dos blocos existe em disco.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with (
+            mock.patch.object(g, "POR_PAGINA", 2),
+            mock.patch.object(g, "POR_SITEMAP", 3),
+        ):
+            codigo, site, _ = _monta(tmp.name, "/repo")
+        self.assertEqual(codigo, 0)
+        self._confere_fechado(site, "/repo")
+        existe = _arquivos(site)
+
+        self.assertTrue(
+            os.path.exists(os.path.join(site, "ncm", "capitulo-84", "pagina-2"))
+        )
+        self.assertIn(
+            '<a href="/repo/ncm/capitulo-84/pagina-2/">2</a>',
+            _le(site, "ncm", "capitulo-84", "index.html"),
+        )
+
+        blocos = self._locs(site, "sitemap.xml")
+        self.assertGreaterEqual(sum(1 for b in blocos if b.startswith("/sitemap-ncm-")), 2)
+        urls = []
+        for bloco in blocos:
+            self.assertIn(bloco, existe, bloco)
+            do_bloco = self._locs(site, bloco.lstrip("/"))
+            self.assertLessEqual(len(do_bloco), 3, bloco)
+            urls += do_bloco
+        for caminho in urls:
+            self.assertIn(caminho, existe, caminho)
+        self.assertIn("/ncm/capitulo-84/pagina-2/", urls)
+        # Sitemap e lastmod.json falam das mesmas páginas, sem repetição.
+        self.assertEqual(len(urls), len(set(urls)))
+        self.assertEqual(set(urls), {c for c, _ in _paginas_do_lastmod(_lastmod(tmp.name))})
+
+    def test_site_fecha_sem_viradas(self):
+        # Em 2100 toda data da fixture já passou: a home muda de molde, o
+        # feed sai sem item, o CSV só com cabeçalho - e tudo continua válido.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        codigo, site, _ = _monta(tmp.name, "/repo", referencia=date(2100, 1, 1))
+        self.assertEqual(codigo, 0)
+        self._confere_fechado(site, "/repo")
+        home = _le(site, "index.html")
+        self.assertIn("<h1>Nenhum atributo de NCM tem virada agendada hoje</h1>", home)
+        self.assertIn(
+            '<p class="pendente">Nenhuma virada agendada no arquivo de hoje.</p>', home
+        )
+        self.assertNotIn("contagem-num", home)
+        self.assertNotIn("O que mudou", home)
+        feed = ET.fromstring(_le(site, "feed.xml"))
+        self.assertEqual(feed.findall(".//item"), [])
+        self.assertEqual(feed.findtext(".//lastBuildDate"), "Fri, 01 Jan 2100 00:00:00 GMT")
+        self.assertEqual(_le(site, "dados", "viradas.csv").count("\n"), 1)
+        self.assertNotIn("Com virada agendada", _le(site, "atributos", "index.html"))
+        self.assertNotIn(
+            "virada agendada</span>", _le(site, "orgaos", "inmetro", "index.html")
+        )
+        self.assertEqual(_jsonld(home)["temporalCoverage"], "2100-01-01")
+
+    def test_site_fecha_com_config_cheia(self):
+        # Domínio próprio (base_path vazio), chave IndexNow, analítica com
+        # aspa no código e formulário embutido com & na URL.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cfg = {
+            "dominio": "sentinela.exemplo.test",
+            "indexnow_key": "a1b2c3d4",
+            "goatcounter_code": 'x"y',
+            "form_embed_url": "https://form.test/e?a=1&b=2",
+        }
+        codigo, site, _ = _monta(tmp.name, "", cfg=cfg)
+        self.assertEqual(codigo, 0)
+        self._confere_fechado(site, "")
+        self.assertEqual(_le(site, "CNAME"), "sentinela.exemplo.test\n")
+        self.assertEqual(_le(site, "a1b2c3d4.txt"), "a1b2c3d4")
+        home = _le(site, "index.html")
+        self.assertIn(
+            '<script data-goatcounter="https://x&quot;y.goatcounter.com/count" async '
+            'src="https://gc.zgo.at/count.js"></script>',
+            home,
+        )
+        self.assertNotIn('https://x"y', home)
+        self.assertIn('<iframe src="https://form.test/e?a=1&amp;b=2"', home)
+        self.assertNotIn("mailto:", home)
+        # Os arquivos de configuração não são páginas: fora do sitemap e do
+        # lastmod.
+        lastmod = _lastmod(tmp.name)
+        self.assertNotIn("/CNAME", lastmod)
+        self.assertNotIn("/a1b2c3d4.txt", lastmod)
+        for nome in os.listdir(site):
+            if nome.startswith("sitemap") and nome.endswith(".xml"):
+                self.assertNotIn("CNAME", _le(site, nome))
+                self.assertNotIn("a1b2c3d4", _le(site, nome))
+        self.assertIn("Sitemap: https://exemplo.test/sitemap.xml", _le(site, "robots.txt"))
+
 
 RE_JSONLD = re.compile(r'<script type="application/ld\+json">(.*?)</script>', re.S)
 
@@ -729,6 +951,209 @@ class TestPublicacao(unittest.TestCase):
         )
 
 
+class _Estrutura(html.parser.HTMLParser):
+    """O que a estrutura de uma página tem de ter, lido com o parser da
+    biblioteca padrão em vez de regex: h1, title, description, canonical,
+    og:url, lang, os JSON-LD, as tabelas abertas e fechadas, os hrefs."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.h1 = 0
+        self.title = None
+        self.description = None
+        self.canonical = None
+        self.og_url = None
+        self.lang = None
+        self.jsonld = []
+        self.tabelas_abertas = 0
+        self.tabelas_fechadas = 0
+        self.hrefs = []
+        self._dentro = None
+        self._texto = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "html":
+            self.lang = a.get("lang")
+        elif tag == "h1":
+            self.h1 += 1
+        elif tag == "title":
+            self._dentro, self._texto = "title", []
+        elif tag == "meta":
+            if a.get("name") == "description":
+                self.description = a.get("content")
+            if a.get("property") == "og:url":
+                self.og_url = a.get("content")
+        elif tag == "link" and a.get("rel") == "canonical":
+            self.canonical = a.get("href")
+        elif tag == "script" and a.get("type") == "application/ld+json":
+            self._dentro, self._texto = "jsonld", []
+        elif tag == "table":
+            self.tabelas_abertas += 1
+        if tag in ("a", "link"):
+            self.hrefs.append(a.get("href"))
+
+    def handle_endtag(self, tag):
+        if tag == "table":
+            self.tabelas_fechadas += 1
+        elif tag == "title" and self._dentro == "title":
+            self.title, self._dentro = "".join(self._texto), None
+        elif tag == "script" and self._dentro == "jsonld":
+            self.jsonld.append("".join(self._texto))
+            self._dentro = None
+
+    def handle_data(self, data):
+        if self._dentro:
+            self._texto.append(data)
+
+
+def _estrutura(html_texto):
+    parser = _Estrutura()
+    parser.feed(html_texto)
+    parser.close()
+    return parser
+
+
+# O que a fixture carrega em ATT_HOSTIL, e como cada pedaço tem de sair no
+# HTML: escapado, nunca cru.
+HOSTIL = {
+    "nome": "Tes<te> \"x\" & 'y'",
+    "nome_html": "Tes&lt;te&gt; &quot;x&quot; &amp; &#39;y&#39;",
+    "definicao_html": "&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;",
+    "orientacao_html": "<p>Preencha {{formulario}} conforme a nota &lt;fiscal&gt;.</p>",
+    "orgao": "ÓRGÃO <B>",
+    "orgao_html": "ÓRGÃO &lt;B&gt;",
+    "opcao_html": "<dt>&lt;1</dt><dd>Opção com &lt; no texto</dd>",
+}
+
+
+class TestHostil(unittest.TestCase):
+    """ATT_HOSTIL: nome, definição, orientação, órgão e domínio com HTML,
+    fechamento de <script> e um {{placeholder}} do template. O arquivo da
+    Receita é entrada externa; nada dele pode chegar cru a lugar nenhum."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.raiz = cls.tmp.name
+        _, cls.site, _ = _monta(cls.raiz, "/repo")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def _textos(self):
+        """Todo arquivo de texto publicado que não é dado bruto: {rel: texto}."""
+        saida = {}
+        for base, _, nomes in os.walk(self.site):
+            for nome in nomes:
+                if nome.endswith((".html", ".xml", ".txt")):
+                    rel = "/" + os.path.relpath(os.path.join(base, nome), self.site)
+                    saida[rel.replace(os.sep, "/")] = _le(base, nome)
+        return saida
+
+    def test_nada_hostil_chega_cru(self):
+        textos = self._textos()
+        self.assertGreater(len(textos), 10)
+        for rel, texto in textos.items():
+            self.assertNotIn("<te>", texto, rel)
+            self.assertNotIn("</script><script>alert", texto, rel)
+            self.assertNotIn("<B>", texto, rel)
+            self.assertNotIn("<fiscal>", texto, rel)
+            if rel.endswith(".html"):
+                # O {{formulario}} do dado fica como texto, intacto, só na
+                # página do atributo - e a captura de verdade continua lá.
+                esperado = CHAVES_TOLERADAS.get(
+                    (rel.replace("index.html", ""), "formulario"), 0
+                )
+                self.assertEqual(texto.count("{{formulario}}"), esperado, rel)
+                self.assertEqual(texto.count('<section class="captura"'), 1, rel)
+                self.assertIn("mailto:a@b.test", texto, rel)
+                for bloco in RE_JSONLD.findall(texto):
+                    json.loads(bloco)
+
+        atributo = textos["/atributos/ATT_HOSTIL/index.html"]
+        self.assertIn(f"<h1>{HOSTIL['nome_html']} (ATT_HOSTIL): vira", atributo)
+        self.assertIn(
+            f"<p>Definição hostil: {HOSTIL['definicao_html']} e segue.</p>", atributo
+        )
+        self.assertIn(HOSTIL["orientacao_html"], atributo)
+        self.assertIn(HOSTIL["opcao_html"], atributo)
+        self.assertIn(f"Atributo exigido por {HOSTIL['orgao_html']}", atributo)
+        self.assertIn(f"<title>{HOSTIL['nome_html']} (ATT_HOSTIL)", atributo)
+        # O JSON-LD neutraliza < > & e continua sendo o mesmo dado.
+        grafo = _jsonld(atributo)
+        trilha = [no for no in grafo["@graph"] if no["@type"] == "BreadcrumbList"][0]
+        self.assertEqual(trilha["itemListElement"][-1]["name"], HOSTIL["nome"])
+        self.assertIn("\\u003c", atributo)
+
+        ncm = textos["/ncm/3004.90.99/index.html"]
+        self.assertIn(
+            f'<a href="/repo/atributos/ATT_HOSTIL/">{HOSTIL["nome_html"]}</a>', ncm
+        )
+        self.assertIn(f"<li><strong>{HOSTIL['nome_html']}</strong></li>", ncm)
+        self.assertIn(f"Exigência do {HOSTIL['orgao_html']}.", ncm)
+        self.assertIn(f'<td role="cell" data-rot="Órgão">{HOSTIL["orgao_html"]}</td>', ncm)
+
+        home = textos["/index.html"]
+        self.assertIn(
+            f'<a href="/repo/atributos/ATT_HOSTIL/">{HOSTIL["nome_html"]}</a>', home
+        )
+        orgao = textos["/orgaos/orgao-b/index.html"]
+        self.assertIn(f"<h1>Atributos exigidos pelo {HOSTIL['orgao_html']} no", orgao)
+        self.assertIn(f'aria-label="Atributos exigidos pelo {HOSTIL["orgao_html"]}"', orgao)
+
+        feed = ET.fromstring(textos["/feed.xml"])
+        titulos = [i.findtext("title") for i in feed.findall(".//item")]
+        self.assertIn(
+            f"NCM 3004.90.99: {HOSTIL['nome']} vira obrigatório em 31/12/2099", titulos
+        )
+        descricoes = [i.findtext("description") for i in feed.findall(".//item")]
+        self.assertTrue(any(HOSTIL["orgao"] in d for d in descricoes))
+
+    def test_dados_abertos_carregam_o_dado_intacto(self):
+        # CSV e JSON são dados, não marcação: escapá-los seria corromper o
+        # nome. O csv e o json da biblioteca padrão devolvem o original.
+        linhas = list(csv.reader(io.StringIO(_le(self.site, "dados", "viradas.csv"))))
+        por_atributo = {linha[1]: linha for linha in linhas[1:]}
+        self.assertEqual(por_atributo["ATT_HOSTIL"][2], HOSTIL["nome"])
+        self.assertEqual(por_atributo["ATT_HOSTIL"][3], HOSTIL["orgao"])
+        publico = json.loads(_le(self.site, "dados", "viradas.json"))
+        self.assertEqual(publico["atributos"]["ATT_HOSTIL"]["nome"], HOSTIL["nome"])
+        self.assertEqual(publico["atributos"]["ATT_HOSTIL"]["orgaos"], [HOSTIL["orgao"]])
+
+    def test_estrutura_de_toda_pagina(self):
+        paginas = _paginas_html(self.site)
+        self.assertGreater(len(paginas), 10)
+        for caminho in paginas:
+            rel = os.path.relpath(caminho, self.site).replace(os.sep, "/")
+            html_texto = _le(caminho)
+            e = _estrutura(html_texto)
+            with self.subTest(pagina=rel):
+                self.assertEqual(e.lang, "pt-BR")
+                self.assertEqual(e.h1, 1)
+                self.assertTrue(e.title and e.title.strip())
+                self.assertTrue(e.description and e.description.strip())
+                self.assertNotEqual(e.title, e.description)
+                if rel == "404.html":
+                    self.assertIsNone(e.canonical)
+                    self.assertIsNone(e.og_url)
+                    self.assertEqual(e.jsonld, [])
+                else:
+                    self.assertIsNotNone(e.canonical)
+                    self.assertEqual(e.canonical, e.og_url)
+                    self.assertEqual(len(e.jsonld), 1)
+                for bloco in e.jsonld:
+                    self.assertIsInstance(json.loads(bloco), dict)
+                self.assertEqual(e.tabelas_abertas, e.tabelas_fechadas)
+                self.assertEqual(html_texto.count("<table"), e.tabelas_abertas)
+                self.assertNotIn(None, e.hrefs)
+                self.assertNotIn("", e.hrefs)
+        # Pelo menos uma página tem tabela: o parser não está contando zero
+        # por não ter visto nada.
+        self.assertGreater(_estrutura(_le(self.site, "index.html")).tabelas_abertas, 0)
+
+
 class TestDateModified(unittest.TestCase):
     def _datas_jsonld(self, site):
         """{caminho: dateModified} das paginas de NCM e de atributo."""
@@ -785,7 +1210,9 @@ class TestModoLote(unittest.TestCase):
 
     # Acima do limiar do lote E do teto do aviso na pagina do atributo.
     N = max(g.LIMIAR_LOTE, g.MAX_NCMS_AVISO) + 15
-    # No dia 23 ATT_HOJE ja passou: sobra UMA virada solta (ATT_FUTURO).
+    # No dia 23 ATT_HOJE ja passou: sobram DUAS viradas soltas (ATT_FUTURO e
+    # ATT_HOSTIL).
+    SOLTAS = 2
     DIA = date(2026, 8, 23)
 
     def _roda(self, tmp, n=N, referencia=DIA, data=apoio.DATA_LOTE):
@@ -803,20 +1230,21 @@ class TestModoLote(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         site = self._roda(tmp.name)
         home = _le(site, "index.html")
-        # Uma linha de lote e uma solta; a contagem segue por vinculo.
+        # Uma linha de lote e as soltas; a contagem segue por vinculo.
         self.assertEqual(home.count('<tr role="row" class="lote">'), 1)
-        self.assertEqual(home.count('<td role="cell" class="ncm"'), 1)
+        self.assertEqual(home.count('<td role="cell" class="ncm"'), self.SOLTAS)
         self.assertIn(f"<strong>{self.N} NCMs</strong>", home)
         self.assertIn(
             '<a href="/repo/atributos/ATT_LOTE/">veja as NCMs na página do atributo</a>',
             home,
         )
-        self.assertIn(f"<h1>{self.N + 1} atributos de NCM viram obrigatórios", home)
-        self.assertIn(f"São {self.N + 1} vínculos em {self.N + 1} NCMs.", home)
-        self.assertIn(f"<div><span>vínculos</span>{self.N} de {self.N + 1}</div>", home)
-        # Feed: um item para o lote, um para a solta.
+        total = self.N + self.SOLTAS
+        self.assertIn(f"<h1>{total} atributos de NCM viram obrigatórios", home)
+        self.assertIn(f"São {total} vínculos em {total} NCMs.", home)
+        self.assertIn(f"<div><span>vínculos</span>{self.N} de {total}</div>", home)
+        # Feed: um item para o lote, um para cada solta.
         feed = _le(site, "feed.xml")
-        self.assertEqual(feed.count("<item>"), 2)
+        self.assertEqual(feed.count("<item>"), 1 + self.SOLTAS)
         self.assertIn(
             f"vira obrigatório em 01/01/2027 para {self.N} NCMs</title>"
             "<link>https://exemplo.test/repo/atributos/ATT_LOTE/</link>"
@@ -843,8 +1271,10 @@ class TestModoLote(unittest.TestCase):
         site = self._roda(tmp.name, n=g.LIMIAR_LOTE)
         home = _le(site, "index.html")
         self.assertNotIn('class="lote"', home)
-        self.assertEqual(home.count('<td role="cell" class="ncm"'), g.LIMIAR_LOTE + 1)
-        self.assertEqual(_le(site, "feed.xml").count("<item>"), g.LIMIAR_LOTE + 1)
+        self.assertEqual(
+            home.count('<td role="cell" class="ncm"'), g.LIMIAR_LOTE + self.SOLTAS
+        )
+        self.assertEqual(_le(site, "feed.xml").count("<item>"), g.LIMIAR_LOTE + self.SOLTAS)
 
     def test_o_que_mudou_tem_um_item_por_lote(self):
         tmp = tempfile.TemporaryDirectory()

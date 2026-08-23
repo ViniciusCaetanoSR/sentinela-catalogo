@@ -38,7 +38,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Location", self.prefixo + "/")
             self.end_headers()
             return
-        if self.prefixo and self.path.startswith(self.prefixo + "/"):
+        if self.prefixo:
+            if not self.path.startswith(self.prefixo + "/"):
+                # Fora do prefixo o Pages não serve nada: aquele endereço
+                # pertence ao site raiz da conta, não a este repositório.
+                # Servir mesmo assim faria o preview esconder justamente o
+                # bug que ele existe para revelar - um link interno escrito
+                # sem o prefixo funcionaria aqui e daria 404 no ar.
+                self.send_error(404)
+                return
             self.path = self.path[len(self.prefixo) :]
         super().do_GET()
 

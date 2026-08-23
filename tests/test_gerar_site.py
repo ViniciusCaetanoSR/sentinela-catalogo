@@ -289,7 +289,11 @@ class TestHistorico(unittest.TestCase):
                 }
             ),
         )
-        self._bloco()
+        # O arquivo de ontem foi ignorado (não tem "viradas"), então a
+        # virada de hoje é nova - e nada levanta.
+        html = self._bloco()
+        self.assertIn("Viradas novas", html)
+        self.assertIn("<li>1 — N, a partir de 01/01/2099</li>", html)
 
     def test_janela_e_de_dias_e_nao_de_arquivos(self):
         self._grava(
@@ -311,6 +315,70 @@ class TestHistorico(unittest.TestCase):
         self._grava("2026-08-22.json", json.dumps({"viradas": []}))
         # O de 2020 esta fora dos 30 dias: nao pode virar "saiu da lista".
         self.assertEqual(self._bloco(), "")
+
+    def test_fronteira_da_janela_de_30_dias(self):
+        # Referência 22/08: 23/07 é o trigésimo dia e conta; 22/07 é o
+        # trigésimo primeiro e fica de fora. A virada só existe no arquivo
+        # antigo, então "saiu da lista" aparece se e só se ele entra.
+        antigo = json.dumps({"viradas": [self._virada("1", "A", "2026-08-01", "Velha")]})
+        self._grava("2026-08-22.json", json.dumps({"viradas": []}))
+        self._grava("2026-07-23.json", antigo)
+        self.assertIn("Velha", self._bloco())
+        os.remove(os.path.join(self.build.caminhos.historico, "2026-07-23.json"))
+        self._grava("2026-07-22.json", antigo)
+        self.assertEqual(self._bloco(), "")
+        arquivos = g.arquivos_historico(
+            self.build.caminhos.historico, date(2026, 8, 22), g.JANELA_HISTORICO
+        )
+        self.assertEqual([q.isoformat() for q, _ in arquivos], ["2026-08-22"])
+
+    def test_buraco_na_janela_nao_derruba(self):
+        # Dez dias sem coleta entre um arquivo e o outro: compara com o
+        # último que existe, sem inventar os que faltam.
+        self._grava(
+            "2026-08-10.json",
+            json.dumps({"viradas": [self._virada("1", "A", "2026-09-01", "De antes")]}),
+        )
+        self._grava(
+            "2026-08-22.json",
+            json.dumps({"viradas": [self._virada("2", "B", "2026-09-01", "De hoje")]}),
+        )
+        html = self._bloco()
+        self.assertIn("<li>2 — De hoje, a partir de 01/09/2026</li>", html)
+        self.assertIn("<li>1 — De antes</li>", html)
+
+    def test_nome_que_nao_e_data_e_ignorado(self):
+        # Um .json perdido na pasta (notas, backup) não é snapshot: nem
+        # conta como arquivo da janela nem contribui com viradas.
+        self._grava("2026-08-22.json", json.dumps({"viradas": []}))
+        for nome in (
+            "notas.json",
+            "2026-08-21-backup.json",
+            "ultimo.json",
+            "2026-08-21.txt",
+        ):
+            self._grava(
+                nome,
+                json.dumps({"viradas": [self._virada("9", "Z", "2026-09-01", "Lixo")]}),
+            )
+        self.assertEqual(self._bloco(), "")
+        arquivos = g.arquivos_historico(self.build.caminhos.historico, date(2026, 8, 22))
+        self.assertEqual([os.path.basename(c) for _, c in arquivos], ["2026-08-22.json"])
+
+    def test_arquivo_do_futuro_e_ignorado(self):
+        # Um snapshot datado depois da referência (relógio errado, fixture
+        # de teste esquecida) não pode ser "hoje" nem entrar na comparação.
+        self._dois_dias(
+            [self._virada("1", "A", "2026-09-01")],
+            [self._virada("1", "A", "2026-09-01")],
+        )
+        self._grava(
+            "2026-08-23.json",
+            json.dumps({"viradas": [self._virada("7", "F", "2026-09-01", "Do futuro")]}),
+        )
+        self.assertEqual(self._bloco(), "")
+        vista = g.primeira_vista(self.build.caminhos.historico, date(2026, 8, 22))
+        self.assertNotIn(("7", "F", "2026-09-01"), vista)
 
     def test_saiu_da_lista_mostra_nome_e_nao_codigo(self):
         self._grava(
@@ -618,7 +686,9 @@ class TestFeed(unittest.TestCase):
         return [i.findtext("pubDate") for i in raiz.findall(".//item")]
 
     def test_xml_valido(self):
-        ET.fromstring(self._feed(self.SNAP))
+        raiz = ET.fromstring(self._feed(self.SNAP))
+        self.assertEqual(raiz.tag, "rss")
+        self.assertEqual(len(raiz.findall(".//item")), 1)
 
     def test_tem_link_self(self):
         xml = self._feed(self.SNAP)

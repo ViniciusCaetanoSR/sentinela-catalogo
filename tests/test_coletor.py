@@ -496,7 +496,10 @@ class TestDatasInvalidas(unittest.TestCase):
 
 class TestValidarForma(unittest.TestCase):
     def test_aceita_a_fixture(self):
-        coletor.validar_forma(amostra())
+        dados = amostra()
+        self.assertIsNone(coletor.validar_forma(dados))
+        # E o que passou na forma é o que a regra lê: a fixture tem viradas.
+        self.assertTrue(coletor.viradas(dados, HOJE))
 
     def test_obrigatorio_como_string_e_recusado(self):
         # O caso em que viradas() zerava em silêncio e o site publicava
@@ -510,7 +513,8 @@ class TestValidarForma(unittest.TestCase):
         dados = amostra()
         del dados["listaNcm"][2]["listaAtributos"][0]["obrigatorio"]
         dados["listaNcm"][2]["listaAtributos"][1]["obrigatorio"] = None
-        coletor.validar_forma(dados)
+        self.assertIsNone(coletor.validar_forma(dados))
+        self.assertEqual(coletor.contagens(dados, HOJE)["obrigatorio_nao_booleano"], 0)
 
     def test_listaNcm_nao_lista_e_recusada(self):
         dados = amostra()
@@ -540,7 +544,11 @@ class TestValidarForma(unittest.TestCase):
         dados = amostra()
         dados["detalhesAtributos"][0]["orgaos"] = None
         dados["detalhesAtributos"][0]["dominio"] = None
-        coletor.validar_forma(dados)
+        self.assertIsNone(coletor.validar_forma(dados))
+        # None vira lista vazia no que é publicado, nunca TypeError.
+        detalhe = coletor.dicionario_atributos(dados)["ATT_OMITIDO"]
+        self.assertEqual(coletor.detalhe_publico(detalhe)["orgaos"], [])
+        self.assertEqual(coletor.detalhe_publico(detalhe)["dominio"], [])
 
     def test_raiz_nao_objeto(self):
         with self.assertRaisesRegex(RuntimeError, "schema inesperado"):
@@ -582,10 +590,11 @@ class TestPortaoDeSanidade(unittest.TestCase):
                 }
             )
 
-    def test_rejeita_versao_ausente(self):
-        ruim = dict(self.BOA, versao=None)
-        with self.assertRaises(RuntimeError):
-            coletor.conferir_sanidade(ruim)
+    def test_rejeita_versao_ausente_ou_vazia(self):
+        for versao in (None, ""):
+            with self.subTest(versao=versao):
+                with self.assertRaisesRegex(RuntimeError, "versao ausente ou vazia"):
+                    coletor.conferir_sanidade(dict(self.BOA, versao=versao))
 
     def test_rejeita_abaixo_de_cada_piso(self):
         for chave, piso in coletor.PISO.items():
@@ -611,15 +620,74 @@ class TestPortaoDeSanidade(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             coletor.conferir_sanidade(atual, anterior)
 
+    def test_rejeita_queda_em_cada_chave_rolante(self):
+        # Cada uma das contagens comparadas com ontem, sozinha, segura o
+        # portão - e a mensagem diz qual.
+        for chave in coletor.ROLANTES:
+            with self.subTest(chave=chave):
+                atual = dict(self.BOA, **{chave: int(self.BOA[chave] * 0.8)})
+                with self.assertRaisesRegex(RuntimeError, f"{chave} caiu de"):
+                    coletor.conferir_sanidade(atual, self.BOA)
+
     def test_fronteira_exata_dos_10_por_cento(self):
-        coletor.conferir_sanidade(dict(self.BOA, ncms=9514), self.BOA)
-        with self.assertRaises(RuntimeError):
+        # 10% de 10571 é 1057,1: 9514 ainda está dentro, 9513 não.
+        self.assertEqual(coletor.conferir_sanidade(dict(self.BOA, ncms=9514), self.BOA), [])
+        with self.assertRaisesRegex(RuntimeError, "ncms caiu de 10571 para 9513"):
             coletor.conferir_sanidade(dict(self.BOA, ncms=9513), self.BOA)
 
     def test_tolera_variacao_pequena(self):
         anterior = dict(self.BOA)
         atual = dict(self.BOA, ncms=10500, vinculos=73000)
-        coletor.conferir_sanidade(atual, anterior)
+        self.assertEqual(coletor.conferir_sanidade(atual, anterior), [])
+
+    def test_crescimento_passa(self):
+        maior = {k: (v * 3 if isinstance(v, int) else v) for k, v in self.BOA.items()}
+        self.assertEqual(coletor.conferir_sanidade(maior, self.BOA), [])
+
+    def test_anterior_sem_a_chave_e_ignorado(self):
+        # O snapshot de ontem pode ser de um código que ainda não contava
+        # "obrigatorios": sem a chave não há com que comparar, e a chave
+        # nova não pode inventar uma queda.
+        anterior = {k: v for k, v in self.BOA.items() if k != "obrigatorios"}
+        atual = dict(self.BOA, obrigatorios=6000)
+        self.assertEqual(coletor.conferir_sanidade(atual, anterior), [])
+        # As outras continuam vigiadas.
+        with self.assertRaisesRegex(RuntimeError, "ncms caiu"):
+            coletor.conferir_sanidade(dict(atual, ncms=8000), anterior)
+
+    def test_anterior_zero_nao_divide_nem_acusa(self):
+        anterior = dict(self.BOA, obrigatorios=0)
+        self.assertEqual(coletor.conferir_sanidade(self.BOA, anterior), [])
+
+    def test_sem_anterior_nao_compara(self):
+        self.assertEqual(coletor.conferir_sanidade(self.BOA, None), [])
+        self.assertEqual(coletor.conferir_sanidade(self.BOA, {}), [])
+
+    def test_mensagem_lista_todos_os_problemas(self):
+        # Um problema por vez custaria um dia por problema: a mensagem traz
+        # todos de uma vez, separados por ponto e vírgula.
+        ruim = dict(
+            self.BOA,
+            versao="",
+            ncms=8000,
+            obrigatorios=100,
+            obrigatorio_nao_booleano=2,
+            datas_invalidas=500,
+        )
+        with self.assertRaises(RuntimeError) as ctx:
+            coletor.conferir_sanidade(ruim, self.BOA)
+        mensagem = str(ctx.exception)
+        self.assertTrue(mensagem.startswith("colheita degenerada, nada foi gravado: "))
+        for pedaco in (
+            "versao ausente ou vazia",
+            "obrigatorios=100 abaixo do piso 5000",
+            "obrigatorio não booleano em 2 vínculos",
+            "datas_invalidas=500",
+            "ncms caiu de 10571 para 8000",
+            "obrigatorios caiu de 15080 para 100",
+        ):
+            self.assertIn(pedaco, mensagem)
+        self.assertEqual(mensagem.count("; "), 5)
 
     def test_data_invalida_em_massa_e_recusada_pelo_portao(self):
         # 0,1% de 73.248 = 73,2: 73 passa, 74 não.
@@ -1413,8 +1481,9 @@ class TestColetarFimAFim(unittest.TestCase):
                 mock.patch("sys.stdout", new_callable=io.StringIO) as out,
             ):
                 coletor.main([])
-        self.assertIn("7 viradas agendadas", out.getvalue())
-        self.assertIn("... e mais 4 viradas", out.getvalue())
+        # 3 da amostra (ATT_HOJE, ATT_FUTURO, ATT_HOSTIL) + 5 do lote.
+        self.assertIn("8 viradas agendadas", out.getvalue())
+        self.assertIn("... e mais 5 viradas", out.getvalue())
         # O nome e o órgão saem do mapa, não da virada.
         self.assertIn("INMETRO", out.getvalue())
 
@@ -1444,7 +1513,8 @@ class TestViradaEmMassa(unittest.TestCase):
         self.assertTrue(all(v["vira_obrigatorio_em"] == apoio.DATA_LOTE for v in do_lote))
         # Uma entrada por atributo, não por virada.
         self.assertEqual(
-            set(snapshot["atributos"]), {apoio.ATT_LOTE, "ATT_FUTURO", "ATT_HOJE"}
+            set(snapshot["atributos"]),
+            {apoio.ATT_LOTE, "ATT_FUTURO", "ATT_HOJE", "ATT_HOSTIL"},
         )
         self.assertEqual(snapshot["atributos"][apoio.ATT_LOTE]["orgaos"], ["RFB"])
         self.assertNotIn("ncms_afetadas", snapshot)
