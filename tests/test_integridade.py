@@ -24,7 +24,9 @@ import gerar_site as g  # noqa: E402
 
 HOJE = date(2026, 8, 22)
 
-RE_LINK = re.compile(r'(?:href|src)="([^"]+)"')
+# action entra porque o form "Ir para a NCM" aponta para /ncm/ com o prefixo,
+# e sem JS é para lá que o envio vai.
+RE_LINK = re.compile(r'(?:href|src|action)="([^"]+)"')
 EXTERNO = ("http://", "https://", "mailto:", "//", "#", "data:")
 
 
@@ -280,6 +282,93 @@ class TestSiteFecha(unittest.TestCase):
         self.assertNotIn('aria-label="É hoje', home)
         self.assertIn('<section class="captura" aria-labelledby="captura-titulo">', home)
         self.assertIn('<h2 id="captura-titulo">', home)
+
+    def test_paginas_carregam_data_referencia(self):
+        # É o que o app.js lê para avisar que o dado envelheceu: tem de
+        # estar em TODA página, inclusive na de erro.
+        site, _ = self._roda("/repo")
+        for base, _, nomes in os.walk(site):
+            for nome in nomes:
+                if nome.endswith(".html"):
+                    self.assertIn(
+                        '<body data-referencia="2026-08-22">',
+                        _le(base, nome),
+                        os.path.join(base, nome),
+                    )
+
+    def test_home_tem_data_corte(self):
+        # O cartão, as células de prazo da tabela e os avisos de NCM e de
+        # atributo carregam a data do corte: o app.js refaz o prazo com o
+        # relógio do navegador, e o texto do build fica para quem não roda JS.
+        site, _ = self._roda("/repo")
+        home = _le(site, "index.html")
+        self.assertIn(
+            "<h1>2 atributos de NCM viram obrigatórios "
+            '<span data-corte="2026-08-22" data-estilo="h1">hoje</span></h1>',
+            home,
+        )
+        self.assertIn(
+            '<span class="contagem-num" data-contagem="0" data-corte="2026-08-22" '
+            'aria-hidden="true" style="--digitos:1">0</span>'
+            '<span class="contagem-un" aria-hidden="true">dias</span>',
+            home,
+        )
+        self.assertIn(
+            '<span class="prazo-txt urgente" data-corte="2026-08-22">hoje</span>'
+            '<span class="prazo urgente"><i style="--w:6%"></i></span>',
+            home,
+        )
+        self.assertIn('data-corte="2099-12-31">em 26794 dias</span>', home)
+        ncm = _le(site, "ncm", "8418.69.20", "index.html")
+        self.assertIn(
+            '<div class="aviso"><strong data-corte="2026-08-22">É hoje.</strong> '
+            "Exigência do INMETRO.",
+            ncm,
+        )
+        atributo = _le(site, "atributos", "ATT_FUTURO", "index.html")
+        self.assertIn(
+            '<div class="aviso"><strong data-corte="2099-12-31">Faltam 26794 dias.'
+            "</strong> Este atributo vira obrigatório em 31/12/2099 para 1 NCM:",
+            atributo,
+        )
+
+    def test_busca_de_ncm_na_home_no_indice_e_no_404(self):
+        site, _ = self._roda("/repo")
+        inicio = '<form class="ir-ncm" action="/repo/ncm/" method="get" role="search"'
+        for partes, marca in (
+            (("index.html",), ">"),
+            (("ncm", "index.html"), ">"),
+            (("404.html",), ' data-404="1">'),
+        ):
+            html = _le(site, *partes)
+            self.assertEqual(html.count(inicio + marca), 1, partes)
+            self.assertEqual(html.count("<form"), 1, partes)
+            self.assertIn('<label for="ir-ncm-campo">Ir para a NCM</label>', html)
+        # Fora das três, nenhuma: uma NCM não precisa de busca de NCM.
+        self.assertNotIn("ir-ncm", _le(site, "ncm", "8415.10.90", "index.html"))
+        self.assertNotIn("ir-ncm", _le(site, "atributos", "index.html"))
+
+    def test_ncm_sem_pontos_no_chapeu_e_na_description(self):
+        site, _ = self._roda("/repo")
+        for ncm, digitos in (("8415.10.90", "84151090"), ("8703.10.00", "87031000")):
+            html = _le(site, "ncm", ncm, "index.html")
+            self.assertIn(
+                f'<span class="chapeu">NCM {ncm} <button class="copiar" type="button" '
+                f'data-copiar="{ncm}"',
+                html,
+            )
+            self.assertIn(
+                f'· <span class="ncm-digitos">{digitos}</span> <button class="copiar" '
+                f'type="button" data-copiar="{digitos}"',
+                html,
+            )
+            self.assertRegex(
+                html,
+                '<meta name="description" content="[^"]*NCM '
+                + re.escape(f"{ncm} ({digitos})"),
+            )
+            # Um único status para os dois botões.
+            self.assertEqual(html.count('id="copia-status"'), 1)
 
     def test_paginacao_e_nav_com_aria_current(self):
         antigo = g.POR_PAGINA

@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -884,6 +885,152 @@ class TestPng(unittest.TestCase):
         d = g._png_solido(10, 4, [(0, 0, 5, 2, (255, 0, 0))], (0, 0, 0))
         self.assertEqual(d[:8], b"\x89PNG\r\n\x1a\n")
         self.assertEqual(struct.unpack(">II", d[16:24]), (10, 4))
+
+
+def _app_js():
+    with open(os.path.join(comum.padrao().templates, "app.js"), encoding="utf-8") as f:
+        return f.read()
+
+
+class TestPrazo(unittest.TestCase):
+    # (dias, curto, frase, contagem, unidade): a tabela de casos que o JS
+    # tem de reproduzir. -3 e -1 só acontecem no navegador, com dado velho.
+    CASOS = [
+        (-3, "prazo vencido há 3 dias", "Prazo vencido há 3 dias."),
+        (-1, "prazo vencido há 1 dia", "Prazo vencido há 1 dia."),
+        (0, "hoje", "É hoje."),
+        (1, "amanhã", "Falta 1 dia."),
+        (2, "em 2 dias", "Faltam 2 dias."),
+        (7, "em 7 dias", "Faltam 7 dias."),
+        (30, "em 30 dias", "Faltam 30 dias."),
+    ]
+
+    def test_prazo_humano_tabela_de_casos(self):
+        for dias, curto, frase in self.CASOS:
+            with self.subTest(dias=dias):
+                self.assertEqual(g.prazo_humano(dias), curto)
+                self.assertEqual(g.prazo_humano(dias, "frase"), frase)
+
+    def test_prazo_humano_contagem_e_unidade(self):
+        self.assertEqual(
+            g.prazo_humano(0, "contagem", "22/08/2026"),
+            "O próximo corte é hoje, 22/08/2026.",
+        )
+        self.assertEqual(
+            g.prazo_humano(1, "contagem", "23/08/2026"),
+            "Falta 1 dia para o próximo corte, em 23/08/2026.",
+        )
+        self.assertEqual(
+            g.prazo_humano(8, "contagem", "30/08/2026"),
+            "Faltam 8 dias para o próximo corte, em 30/08/2026.",
+        )
+        self.assertEqual(
+            g.prazo_humano(-2, "contagem", "20/08/2026"),
+            "O próximo corte foi em 20/08/2026, há 2 dias.",
+        )
+        self.assertEqual(
+            [g.prazo_humano(d, "unidade") for d in (-2, -1, 0, 1, 2)],
+            ["dias atrás", "dia atrás", "dias", "dia", "dias"],
+        )
+        self.assertEqual(
+            [g.prazo_humano(d, "h1") for d in (-2, 0, 1, 8)],
+            ["há 2 dias", "hoje", "amanhã", "nos próximos 8 dias"],
+        )
+
+    def test_largura_da_barra(self):
+        # 30 dias enche; hoje e vencido ficam no mínimo visível.
+        self.assertEqual(g.largura_prazo(30), 100)
+        self.assertEqual(g.largura_prazo(60), 100)
+        self.assertEqual(g.largura_prazo(15), 50)
+        self.assertEqual(g.largura_prazo(0), 6)
+        self.assertEqual(g.largura_prazo(-5), 6)
+
+    def test_textos_de_prazo_iguais_no_js(self):
+        # O app.js reescreve os prazos no navegador com uma cópia desta
+        # tabela. Sem Node na suíte, o que dá para garantir é que a cópia é
+        # literalmente igual: o bloco é JSON estrito e sai daqui por
+        # json.loads. Os dois números da barra e da urgência também.
+        js = _app_js()
+        m = re.search(r"var TEXTOS_PRAZO = (\{.*?\n  \});", js, re.S)
+        self.assertIsNotNone(m, "TEXTOS_PRAZO não encontrado no app.js")
+        tabela = json.loads(m.group(1))
+        self.assertEqual(tabela, g.TEXTOS_PRAZO)
+        m = re.search(r"var DIAS_BARRA_CHEIA = (\d+), DIAS_URGENTE = (\d+);", js)
+        self.assertIsNotNone(m)
+        self.assertEqual(
+            (int(m.group(1)), int(m.group(2))), (g.DIAS_BARRA_CHEIA, g.DIAS_URGENTE)
+        )
+        # E a tabela de casos, aplicada à cópia do JS do mesmo jeito que o
+        # script aplica (replace de {n} e {dia}), dá o mesmo texto.
+        for dias, curto, frase in self.CASOS:
+            n = abs(dias)
+            caso = g.caso_prazo(dias)
+            for estilo, esperado in (("curto", curto), ("frase", frase)):
+                texto = (
+                    tabela[estilo][caso]
+                    .replace("{n}", str(n))
+                    .replace("{dia}", g.plural(n, "dia", "dias"))
+                )
+                self.assertEqual(texto, esperado, (dias, estilo))
+
+    def test_js_avisa_dado_velho_e_o_css_veste(self):
+        self.assertIn('faixa.className = "dado-velho"', _app_js())
+        self.assertIn("Estes dados são de", _app_js())
+        self.assertIn('"data-referencia"', _app_js())
+        with open(
+            os.path.join(comum.padrao().templates, "estilo.css"), encoding="utf-8"
+        ) as f:
+            self.assertIn(".dado-velho{", f.read())
+
+    def test_celula_da_tabela_carrega_data_corte_e_prazo_vencido(self):
+        build = _build(comum.RAIZ)
+        html = g._celulas_virada(
+            build, "ATT_1", "Nome", ["X"], "2026-08-30", date(2026, 8, 22)
+        )
+        self.assertIn(
+            '<span class="prazo-txt" data-corte="2026-08-30">em 8 dias</span>'
+            '<span class="prazo"><i style="--w:27%"></i></span>',
+            html,
+        )
+        html = g._celulas_virada(
+            build, "ATT_1", "Nome", ["X"], "2026-08-30", date(2026, 8, 28)
+        )
+        self.assertIn(
+            '<span class="prazo-txt urgente" data-corte="2026-08-30">em 2 dias', html
+        )
+        # O build nunca produz prazo vencido (a regra é fim >= hoje), mas a
+        # função é a mesma que o JS espelha e tem de saber escrevê-lo.
+        html = g._celulas_virada(
+            build, "ATT_1", "Nome", ["X"], "2026-08-30", date(2026, 9, 2)
+        )
+        self.assertIn("prazo vencido há 3 dias</span>", html)
+        self.assertIn('<span class="prazo urgente"><i style="--w:6%">', html)
+
+
+class TestBuscaNcm(unittest.TestCase):
+    def test_so_digitos(self):
+        self.assertEqual(g.so_digitos("8415.10.90"), "84151090")
+        self.assertEqual(g.so_digitos("8415 10 90"), "84151090")
+        self.assertEqual(g.so_digitos(""), "")
+        self.assertEqual(g.so_digitos(None), "")
+
+    def test_form_usa_o_prefixo_e_cai_no_indice_sem_js(self):
+        html = g.form_ncm(CFG)
+        self.assertTrue(
+            html.startswith(
+                '<form class="ir-ncm" action="/repo/ncm/" method="get" role="search">'
+            )
+        )
+        self.assertIn('<input id="ir-ncm-campo" name="ncm" inputmode="numeric"', html)
+        self.assertIn('pattern="[0-9. ]{4,10}"', html)
+        self.assertIn('<p class="ir-ncm-erro" role="alert"></p>', html)
+        self.assertNotIn("data-404", html)
+        self.assertIn('action="/ncm/"', g.form_ncm(SEM_PREFIXO))
+
+    def test_form_da_404_e_marcado_e_escapa_o_valor(self):
+        html = g.form_ncm(CFG, valor='"><x', na_404=True)
+        self.assertIn('role="search" data-404="1">', html)
+        self.assertIn('value="&quot;&gt;&lt;x"', html)
 
 
 if __name__ == "__main__":

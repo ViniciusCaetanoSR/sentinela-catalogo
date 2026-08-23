@@ -231,6 +231,134 @@ def dias_ate(iso, referencia):
     return (date.fromisoformat(iso) - referencia).days
 
 
+# Os textos de prazo, numa tabela só - porque existem em DOIS lugares: aqui,
+# para o HTML do build, e em templates/app.js, que recalcula o prazo no
+# navegador a partir de data-corte (o build é de manhã; quem abre a página
+# à noite, ou dias depois, com a coleta parada, veria "faltam 3 dias" quando
+# faltam 2 - ou nenhum). O JS carrega uma cópia literal desta tabela
+# (TEXTOS_PRAZO, em JSON estrito) e um teste confere que as duas são iguais,
+# para o texto nunca divergir entre o que o build escreve e o que o script
+# reescreve. Placeholders: {n} é o número de dias (sempre positivo), {dia} é
+# "dia"/"dias" conforme {n}, {data} é a data do corte em DD/MM/AAAA.
+#
+#   curto     a célula da tabela ("em 8 dias")
+#   frase     o <strong> do aviso da NCM e do atributo ("Faltam 8 dias.")
+#   contagem  a frase do cartão da home, só para leitor de tela
+#   unidade   a palavra ao lado do número grande do cartão
+#   h1        o fim do h1 da home ("nos próximos 8 dias")
+#
+# "vencido" é o caso que o build nunca produz (a regra das viradas é
+# fim >= hoje) mas o navegador produz sempre que o dado fica velho: é o
+# único texto que só o JS escreve.
+TEXTOS_PRAZO = {
+    "curto": {
+        "vencido": "prazo vencido há {n} {dia}",
+        "hoje": "hoje",
+        "amanha": "amanhã",
+        "futuro": "em {n} dias",
+    },
+    "frase": {
+        "vencido": "Prazo vencido há {n} {dia}.",
+        "hoje": "É hoje.",
+        "amanha": "Falta 1 dia.",
+        "futuro": "Faltam {n} dias.",
+    },
+    "contagem": {
+        "vencido": "O próximo corte foi em {data}, há {n} {dia}.",
+        "hoje": "O próximo corte é hoje, {data}.",
+        "amanha": "Falta 1 dia para o próximo corte, em {data}.",
+        "futuro": "Faltam {n} dias para o próximo corte, em {data}.",
+    },
+    "unidade": {
+        "vencido": "{dia} atrás",
+        "hoje": "dias",
+        "amanha": "dia",
+        "futuro": "dias",
+    },
+    "h1": {
+        "vencido": "há {n} {dia}",
+        "hoje": "hoje",
+        "amanha": "amanhã",
+        "futuro": "nos próximos {n} dias",
+    },
+}
+# Dias até o corte a partir dos quais a barra de prazo enche; e o limite
+# abaixo do qual o prazo é "urgente". Os mesmos dois números estão no app.js.
+DIAS_BARRA_CHEIA = 30
+DIAS_URGENTE = 7
+
+
+def caso_prazo(dias):
+    """A chave de TEXTOS_PRAZO para N dias: vencido, hoje, amanha ou futuro."""
+    if dias < 0:
+        return "vencido"
+    if dias == 0:
+        return "hoje"
+    if dias == 1:
+        return "amanha"
+    return "futuro"
+
+
+def prazo_humano(dias, estilo="curto", data=""):
+    """'em 8 dias', 'É hoje.', 'prazo vencido há 3 dias'... conforme o estilo.
+
+    A substituição é por replace, não por str.format, de propósito: é a
+    mesma operação que o app.js faz sobre a mesma tabela, e o teste que
+    compara os dois não precisa entender nenhuma sintaxe além de {n}.
+    """
+    n = abs(dias)
+    return (
+        TEXTOS_PRAZO[estilo][caso_prazo(dias)]
+        .replace("{n}", str(n))
+        .replace("{dia}", plural(n, "dia", "dias"))
+        .replace("{data}", data)
+    )
+
+
+def largura_prazo(dias):
+    """Largura (%) da barra de prazo: DIAS_BARRA_CHEIA enche, hoje quase vazia.
+    Nunca abaixo de 6 para a barra continuar visível - inclusive vencida."""
+    return min(100, max(6, round(dias / DIAS_BARRA_CHEIA * 100)))
+
+
+def so_digitos(ncm):
+    """8415.10.90 -> 84151090: a forma em que a NCM circula em planilha,
+    sistema e busca. Quem procura digita sem pontos."""
+    return re.sub(r"\D", "", ncm or "")
+
+
+def form_ncm(cfg, valor="", na_404=False):
+    """O campo "Ir para a NCM": um <form> sem backend.
+
+    Com JS (app.js), o envio normaliza o que foi digitado - 84151090,
+    8415.10.90, 8415 10 90 - e navega direto para a página da NCM (8
+    dígitos) ou do capítulo (4 a 7). Sem JS, o GET cai em /ncm/?ncm=..., o
+    índice por capítulo, que é o melhor que um site estático responde. O
+    pattern deixa o navegador barrar o que não tem nem 4 dígitos antes de
+    sair da página; o resto da validação é do script.
+
+    na_404 marca o form para o script da página de erro: ele lê a URL que
+    deu 404 e, se for uma NCM sem pontos, redireciona; se for uma NCM
+    pontuada que não existe, deixa o campo preenchido para corrigir.
+    """
+    marca = ' data-404="1"' if na_404 else ""
+    return (
+        f'<form class="ir-ncm" action="{esc(url(cfg, "/ncm/"))}" method="get" '
+        f'role="search"{marca}>'
+        '<label for="ir-ncm-campo">Ir para a NCM</label>'
+        '<div class="ir-ncm-linha">'
+        '<input id="ir-ncm-campo" name="ncm" inputmode="numeric" autocomplete="off" '
+        'pattern="[0-9. ]{4,10}" placeholder="8415.10.90" required '
+        f'aria-describedby="ir-ncm-ajuda" value="{esc(valor)}">'
+        '<button type="submit">Ir</button>'
+        "</div>"
+        '<p class="ir-ncm-ajuda" id="ir-ncm-ajuda">Com ou sem pontos. '
+        "Com menos de 8 dígitos, vai para o capítulo.</p>"
+        '<p class="ir-ncm-erro" role="alert"></p>'
+        "</form>"
+    )
+
+
 RE_DATA = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -498,6 +626,9 @@ def pagina(build, corpo, titulo, descricao, caminho=None, itens_trilha=None, jso
             "css": esc(url(cfg, build.estaticos.get("css", "/estilo.css"))),
             "js": esc(url(cfg, build.estaticos.get("js", "/app.js"))),
             "og_imagem": esc(absoluta(cfg, "/og.png")),
+            # No <body>, para o app.js medir a idade do dado e avisar quando
+            # a coleta parou: o site no ar continua com cara de saudável.
+            "data_referencia": esc(snapshot["data_referencia"]),
             "coletado_em": br(snapshot["data_referencia"]),
             "versao": esc(snapshot["contagens"]["versao"]),
             "formulario": bloco_formulario(cfg),
@@ -519,11 +650,10 @@ def _celulas_virada(build, atributo, nome, orgaos, data, referencia):
     """As três células que lote e virada solta têm em comum: atributo,
     órgão e a data com o prazo."""
     dias = dias_ate(data, referencia)
-    prazo = "hoje" if dias == 0 else ("amanhã" if dias == 1 else f"em {dias} dias")
-    # A barra da a leitura visual do prazo: 30 dias enche, hoje quase vazia.
-    largura = min(100, max(6, round(dias / 30 * 100)))
-    # Urgência acende só abaixo de 7 dias - por isso significa algo.
-    urg = " urgente" if dias <= 7 else ""
+    # Urgência acende só abaixo de DIAS_URGENTE - por isso significa algo.
+    urg = " urgente" if dias <= DIAS_URGENTE else ""
+    # data-corte: o app.js refaz o prazo, a barra e a urgência com o "hoje"
+    # do navegador. O texto do build fica como está para quem não roda JS.
     return (
         f"<td{rotulo('Atributo')}>"
         f"{link_atributo(build, atributo, nome or atributo)}"
@@ -531,8 +661,9 @@ def _celulas_virada(build, atributo, nome, orgaos, data, referencia):
         f"<td{rotulo('Órgão')}>{esc('/'.join(orgaos) or '—')}</td>"
         f'<td class="data"{rotulo("Vira obrigatório em")}>'
         f"{br(data)}"
-        f'<br><span class="prazo-txt{urg}">{prazo}</span>'
-        f'<span class="prazo{urg}"><i style="--w:{largura}%"></i></span>'
+        f'<br><span class="prazo-txt{urg}" data-corte="{esc(data)}">'
+        f"{prazo_humano(dias)}</span>"
+        f'<span class="prazo{urg}"><i style="--w:{largura_prazo(dias)}%"></i></span>'
         f"</td>"
     )
 
@@ -908,25 +1039,23 @@ def gerar_index(build):
         datas = sorted({v["vira_obrigatorio_em"] for v in vs})
         no_corte = sum(1 for v in vs if v["vira_obrigatorio_em"] == proxima)
         seguinte = br(datas[1]) if len(datas) > 1 else "—"
-        unidade = plural(dias, "dia", "dias")
+        unidade = prazo_humano(dias, "unidade")
         juntos = esc("/".join(orgaos_lista))
         # O número grande e o "dias" são visuais (aria-hidden, porque o JS
         # conta de 0 até N e o leitor de tela ouviria a contagem inteira).
         # A frase completa vai num span só para leitor de tela, como
         # conteúdo de verdade: aria-label em <p> é ignorado pela maioria
         # dos leitores, que não tratam parágrafo como elemento nomeável.
-        if dias == 0:
-            frase = f"O próximo corte é hoje, {br(proxima)}."
-        else:
-            frase = (
-                f"{'Falta' if dias == 1 else 'Faltam'} {dias} {unidade} "
-                f"para o próximo corte, em {br(proxima)}."
-            )
+        # data-corte é a data do corte: o app.js recalcula os dias com o
+        # relógio do navegador e refaz os três spans; data-contagem é o
+        # valor do build, que fica como fallback da animação.
+        frase = prazo_humano(dias, "contagem", br(proxima))
         cartao = (
             '<div class="contagem-cartao">'
             '<p class="contagem-topo">'
             f'<span class="oculto">{esc(frase)}</span>'
-            f'<span class="contagem-num" data-contagem="{dias}" aria-hidden="true"'
+            f'<span class="contagem-num" data-contagem="{dias}" '
+            f'data-corte="{esc(proxima)}" aria-hidden="true"'
             f' style="--digitos:{len(str(dias))}">{dias}</span>'
             f'<span class="contagem-un" aria-hidden="true">{unidade}</span>'
             "</p>"
@@ -937,16 +1066,21 @@ def gerar_index(build):
             f"<div><span>próximo</span>{seguinte}</div>"
             "</div></div>"
         )
+        # O fim do h1 é o mesmo prazo do cartão, e o app.js o refaz junto
+        # (data-estilo diz qual molde usar); por isso o h1 sai em HTML, já
+        # escapado, e não passa por esc() de novo lá embaixo.
         prazo_h1 = (
-            "hoje"
-            if dias == 0
-            else ("amanhã" if dias == 1 else f"nos próximos {dias} dias")
+            f'<span data-corte="{esc(proxima)}" data-estilo="h1">'
+            f"{esc(prazo_humano(dias, 'h1'))}</span>"
         )
         # milhar(): numa virada em massa são 10 mil, e "10530" não se lê.
         h1 = (
-            f"{milhar(len(vs))} {plural(len(vs), 'atributo', 'atributos')} de NCM "
-            f"{plural(len(vs), 'vira', 'viram')} "
-            f"{plural(len(vs), 'obrigatório', 'obrigatórios')} {prazo_h1}"
+            esc(
+                f"{milhar(len(vs))} {plural(len(vs), 'atributo', 'atributos')} de NCM "
+                f"{plural(len(vs), 'vira', 'viram')} "
+                f"{plural(len(vs), 'obrigatório', 'obrigatórios')} "
+            )
+            + prazo_h1
         )
         lede = (
             f"{plural(len(vs), 'É', 'São')} {milhar(len(vs))} "
@@ -966,7 +1100,7 @@ def gerar_index(build):
         )
         cobertura = f"{snapshot['data_referencia']}/{datas[-1]}"
     else:
-        h1 = "Nenhum atributo de NCM tem virada agendada hoje"
+        h1 = esc("Nenhum atributo de NCM tem virada agendada hoje")
         lede = (
             "O arquivo oficial de hoje não traz nenhum vínculo com data para virar "
             "obrigatório. Esta página é atualizada todo dia — quando a Receita "
@@ -993,9 +1127,10 @@ def gerar_index(build):
         template(build.caminhos.templates, "index.html"),
         {
             "data_ref": br(snapshot["data_referencia"]),
-            "h1": esc(h1),
+            "h1": h1,
             "lede": esc(lede),
             "cartao": cartao,
+            "busca": form_ncm(cfg),
             "tabela": tabela_viradas(build, lotes, soltas, ref),
             "historico": historico,
             "base": esc(prefixo(cfg)),
@@ -1086,6 +1221,9 @@ def gerar_ncms(build):
     for ncm in sorted(completo.get("ncms", {})):
         vs = sorted(por_ncm.get(ncm, []), key=lambda x: x["vira_obrigatorio_em"])
         cap = capitulo(ncm)
+        # A forma sem pontos vai no chapéu e na description: é como a NCM
+        # circula em planilha e é o que a pessoa digita no buscador.
+        digitos = so_digitos(ncm)
         itens_trilha = [
             ("Início", "/"),
             ("NCMs", "/ncm/"),
@@ -1146,24 +1284,20 @@ def gerar_ncms(build):
                 f"a partir de {por_extenso(proxima)}."
             )
             itens = "".join(f"<li><strong>{esc(n)}</strong></li>" for n in nomes)
-            urgencia = (
-                "É hoje."
-                if dias == 0
-                else ("Falta 1 dia." if dias == 1 else f"Faltam {dias} dias.")
-            )
             # O nome do órgão vem do arquivo oficial: era o único dado
             # interpolado sem esc() em todo o gerador.
             exigencia = (
                 f"do {esc(orgaos_v[0])}" if len(orgaos_v) == 1 else "dos órgãos anuentes"
             )
             aviso = (
-                f'<div class="aviso"><strong>{urgencia}</strong> '
+                f'<div class="aviso"><strong data-corte="{esc(proxima)}">'
+                f"{prazo_humano(dias, 'frase')}</strong> "
                 f"Exigência {exigencia}. "
                 f'Atributos afetados:<ul style="margin:8px 0 0">{itens}</ul></div>'
             )
             titulo = f"NCM {ncm} — atributos que viram obrigatórios em {br(proxima)}"
             descricao = (
-                f"NCM {ncm}: {len(vs)} "
+                f"NCM {ncm} ({digitos}): {len(vs)} "
                 f"{plural(len(vs), 'atributo', 'atributos')} do Catálogo de "
                 f"Produtos do Portal Único {plural(len(vs), 'vira', 'viram')} "
                 f"{plural(len(vs), 'obrigatório', 'obrigatórios')} em "
@@ -1174,6 +1308,7 @@ def gerar_ncms(build):
                 template(build.caminhos.templates, "ncm.html"),
                 {
                     "ncm": esc(ncm),
+                    "ncm_digitos": esc(digitos),
                     "h1": esc(h1),
                     "lede": esc(lede),
                     "aviso": aviso,
@@ -1198,14 +1333,15 @@ def gerar_ncms(build):
             aviso = ""
             titulo = f"NCM {ncm} — atributos exigidos no Catálogo de Produtos"
             descricao = (
-                f"Os {len(atributos)} atributos exigidos para a NCM {ncm} no "
-                f"Catálogo de Produtos do Portal Único, com órgão anuente, "
-                f"opções válidas e situação de cada um."
+                f"Os {len(atributos)} atributos exigidos para a NCM {ncm} "
+                f"({digitos}) no Catálogo de Produtos do Portal Único, com "
+                f"órgão anuente, opções válidas e situação de cada um."
             )
             corpo = preencher(
                 template(build.caminhos.templates, "ncm_simples.html"),
                 {
                     "ncm": esc(ncm),
+                    "ncm_digitos": esc(digitos),
                     "h1": esc(h1),
                     "lede": esc(lede),
                     "aviso": aviso,
@@ -1359,6 +1495,9 @@ def gerar_capitulos(build, por_ncm):
         f"Catálogo de Produtos do Portal Único, agrupadas pelos "
         f"{len(por_capitulo)} capítulos da nomenclatura. Cada página lista os "
         f"atributos exigidos, o órgão que exige e as opções válidas.</p>"
+        # Sem JS o form da home cai aqui (?ncm=...): o campo se repete para
+        # a pessoa poder tentar de novo sem voltar.
+        f"{form_ncm(cfg)}"
         f'<ul class="limpa">{itens}</ul>'
     )
     titulo = "NCMs do Catálogo de Produtos do Portal Único — índice por capítulo"
@@ -1414,6 +1553,7 @@ def gerar_atributos(build):
     site só fecha porque nenhum link é emitido sem a página correspondente.
     """
     catalogo = build.catalogo
+    ref = date.fromisoformat(build.snapshot["data_referencia"])
     caminhos = []
     virando = {}
     for v in build.snapshot["viradas"]:
@@ -1441,6 +1581,7 @@ def gerar_atributos(build):
 
         if vs:
             data = min(v["vira_obrigatorio_em"] for v in vs)
+            dias = dias_ate(data, ref)
             ncms_v = sorted({v["ncm"] for v in vs})
             # Numa virada em massa seriam 10 mil chips: o aviso lista as
             # primeiras e remete ao índice por capítulo, que tem todas.
@@ -1451,10 +1592,14 @@ def gerar_atributos(build):
                     f'<a href="{esc(url(build.cfg, "/ncm/"))}">veja o índice por '
                     f"capítulo</a></li>"
                 )
+            # O mesmo molde do aviso da NCM: o prazo no <strong> com
+            # data-corte, que o app.js recalcula, e a data por extenso no
+            # texto, que fica.
             aviso = (
-                f'<div class="aviso"><strong>Este atributo vira obrigatório em '
-                f"{br(data)}</strong> para {milhar(len(ncms_v))} "
-                f"{plural(len(ncms_v), 'NCM', 'NCMs')}:"
+                f'<div class="aviso"><strong data-corte="{esc(data)}">'
+                f"{prazo_humano(dias, 'frase')}</strong> "
+                f"Este atributo vira obrigatório em {br(data)} para "
+                f"{milhar(len(ncms_v))} {plural(len(ncms_v), 'NCM', 'NCMs')}:"
                 f'<ul class="limpa" style="margin-top:10px">{lista}</ul></div>'
             )
             h1 = f"{nome} ({cod}): vira obrigatório em {br(data)}"
@@ -1853,7 +1998,7 @@ def gerar_404(build):
     """
     corpo = preencher(
         template(build.caminhos.templates, "404.html"),
-        {"base": esc(prefixo(build.cfg))},
+        {"base": esc(prefixo(build.cfg)), "busca": form_ncm(build.cfg, na_404=True)},
     )
     escrever(
         build,
