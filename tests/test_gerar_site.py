@@ -1331,6 +1331,74 @@ class TestDadosAbertos(unittest.TestCase):
         )
 
 
+class TestStatus(unittest.TestCase):
+    """status.json é a prova de vida do build, lida de fora do GitHub."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _gera(self, snapshot):
+        build = _build(self.tmp.name, snapshot=snapshot)
+        build.paginas.update({"/": "h1", "/ncm/a/": "h2", "/atributos/x/": "h3"})
+        g.gerar_status(build)
+        with open(os.path.join(build.caminhos.site, "status.json"), encoding="utf-8") as f:
+            return build, json.load(f)
+
+    def test_status_json_tem_as_chaves(self):
+        snapshot = {
+            "schema": 2,
+            "data_referencia": "2026-08-22",
+            "contagens": {"versao": "346"},
+            "viradas": [
+                {"ncm": "1", "atributo": "A", "vira_obrigatorio_em": "2026-08-30"},
+                {"ncm": "2", "atributo": "A", "vira_obrigatorio_em": "2026-08-25"},
+                # Data impossível: não pode virar o "próximo corte".
+                {"ncm": "3", "atributo": "B", "vira_obrigatorio_em": "2026-02-30"},
+            ],
+        }
+        _, status = self._gera(snapshot)
+        self.assertEqual(
+            set(status),
+            {
+                "data_referencia",
+                "versao",
+                "gerado_em",
+                "paginas",
+                "viradas",
+                "proximo_corte",
+                "schema",
+            },
+        )
+        self.assertEqual(status["data_referencia"], "2026-08-22")
+        self.assertEqual(status["versao"], "346")
+        self.assertEqual(status["paginas"], 3)
+        self.assertEqual(status["viradas"], 3)
+        self.assertEqual(status["proximo_corte"], "2026-08-25")
+        self.assertEqual(status["schema"], 2)
+        # UTC com segundos: a conferência pós-deploy só compara a data de
+        # referência, mas quem lê o arquivo à mão precisa de fuso explícito.
+        self.assertRegex(
+            status["gerado_em"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$"
+        )
+
+    def test_sem_virada_o_proximo_corte_e_nulo(self):
+        _, status = self._gera(
+            {"data_referencia": "2100-01-01", "contagens": {"versao": "9"}, "viradas": []}
+        )
+        self.assertIsNone(status["proximo_corte"])
+        self.assertEqual(status["viradas"], 0)
+        # Snapshot sem a chave "schema" é o formato 1, como schema_de diz.
+        self.assertEqual(status["schema"], 1)
+
+    def test_status_nao_entra_no_lastmod(self):
+        # Sem assinatura e sem caminho registrado: o "gerado_em" muda a cada
+        # build e carimbaria lastmod novo todo dia se entrasse aqui.
+        build, _ = self._gera(SNAP)
+        self.assertNotIn("/status.json", build.paginas)
+        self.assertEqual(len(build.paginas), 3)
+
+
 class TestEstaticos(unittest.TestCase):
     def test_css_fontes_reescreve_o_prefixo(self):
         with tempfile.TemporaryDirectory() as tmp:

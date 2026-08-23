@@ -16,6 +16,7 @@ Saida em site/:
     estilo.<hash>.css (com os @font-face dentro), app.<hash>.js, og.png,
     favicon.svg, favicon-32.png, apple-touch-icon.png, fontes/*.woff2
     sitemap.xml (índice) + sitemap-*.xml, robots.txt, feed.xml, 404.html
+    status.json                   o que a conferência pós-deploy lê
 
 Também grava dados/lastmod.json: o hash do conteúdo de cada página e a data
 em que ele mudou pela última vez, que alimenta o lastmod do sitemap - e, sob
@@ -2747,6 +2748,51 @@ def gerar_sitemap(build, caminhos, datas, mudadas, rebuild=False):
     escrever(build, "mudancas.txt", "".join(absoluta(cfg, c) + "\n" for c in lista))
 
 
+def gerar_status(build):
+    """site/status.json: o que o passo pós-deploy lê para saber se o que está
+    NO AR é o build desta run.
+
+    O deploy nunca era conferido. Um base_path errado, um artifact velho ou
+    um Pages que ficou na versão anterior publicavam em silêncio - e o site
+    continuava com cara de saudável, porque ninguém compara o que foi gerado
+    com o que a URL pública devolve. Este arquivo é o ponto de comparação:
+    a conferência baixa `<page_url>status.json` e exige a data desta coleta
+    e um piso de páginas.
+
+    Fica FORA do sitemap e do lastmod - `assinatura=None` e o caminho não
+    entra na lista de páginas publicadas. Não é conteúdo (não há o que
+    indexar num JSON de saúde) e, sobretudo, "gerado_em" muda a cada build:
+    dentro do lastmod ele carimbaria data nova todo dia e mandaria a URL ao
+    IndexNow sem que nada tivesse mudado, que é justamente a mentira que o
+    lastmod honesto existe para evitar. O campo volátil também não produz
+    churn no git, porque site/ não é versionado.
+    """
+    snapshot = build.snapshot
+    cortes = [
+        v["vira_obrigatorio_em"]
+        for v in snapshot["viradas"]
+        if data_valida(v.get("vira_obrigatorio_em"))
+    ]
+    status = {
+        "data_referencia": snapshot["data_referencia"],
+        "versao": (snapshot.get("contagens") or {}).get("versao"),
+        "gerado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        # build.paginas tem uma entrada por página publicada - a mesma lista
+        # que alimenta o sitemap. Sitemaps, feed, robots e este arquivo não
+        # entram: são escritos sem assinatura.
+        "paginas": len(build.paginas),
+        "viradas": len(snapshot["viradas"]),
+        "proximo_corte": min(cortes) if cortes else None,
+        "schema": schema_de(snapshot),
+    }
+    escrever(
+        build,
+        "status.json",
+        json.dumps(status, ensure_ascii=False, indent=1, sort_keys=True) + "\n",
+        assinatura=None,
+    )
+
+
 def versoes_divergem(snapshot, catalogo, completo):
     """Os três arquivos têm de vir da mesma colheita.
 
@@ -2851,6 +2897,11 @@ def gerar(build):
     )
     gravar_lastmod(build.caminhos.lastmod, datas)
     gerar_sitemap(build, caminhos, datas, mudadas, rebuild)
+    # Por último de propósito: status.json declara quantas páginas este build
+    # publicou, então só faz sentido depois de todas escritas - e escrevê-lo
+    # aqui deixa evidente que ele não é insumo de nada (nem do sitemap, nem
+    # do lastmod, que já estão fechados).
+    gerar_status(build)
     return caminhos, mudadas, rebuild
 
 

@@ -262,9 +262,102 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
+    # No nível do job de propósito: o contexto `secrets` não existe no `if:`
+    # de um passo, mas o `env` existe. Sem o secret a variável fica vazia e o
+    # passo do monitor é pulado.
+    env:
+      HEALTHCHECKS_URL: ${{ secrets.HEALTHCHECKS_URL }}
     steps:
       - id: deploy
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+      # O deploy só diz "publicado"; ninguém conferia o que a URL PÚBLICA
+      # devolve. Um base_path errado, um artifact velho ou um Pages que ficou
+      # na versão anterior publicam em silêncio, e o site continua com cara de
+      # saudável. Aqui quem responde é a origem de verdade, de fora do runner.
+      # Qualquer checagem vermelha derruba o job, e o job "avisar" abre a issue.
+      - name: Conferir o que foi publicado
+        env:
+          URL: ${{ steps.deploy.outputs.page_url }}
+          DATA: ${{ needs.coletar.outputs.data }}
+          # O mesmo 5000 do piso absoluto de NCMs no portão do coletor
+          # (coletor.PISO["ncms"]): o site tem ~11 mil páginas, e abaixo
+          # disso alguma coisa desabou entre a apuração e o deploy.
+          PISO_PAGINAS: "5000"
+        run: |
+          # page_url já termina em "/"; sem podar sairia "//status.json".
+          base="${URL%/}/"
+          export STATUS="$RUNNER_TEMP/status.json"
+          echo "conferindo $base"
+          falhou=0
+          erro() { echo "::error::$1"; falhou=1; }
+
+          # --retry-all-errors: entre o deploy responder e o CDN do Pages
+          # servir o build novo há uma janela de alguns segundos.
+          curl -fsS --retry 5 --retry-delay 10 --retry-all-errors \
+            -o "$STATUS" "${base}status.json" \
+            || erro "${base}status.json não respondeu"
+
+          # python3, e não `python`: este job não roda actions/setup-python
+          # (só faz o deploy), então não existe o atalho que ela instala.
+          python3 - <<'PY' || falhou=1
+          import json
+          import os
+
+          try:
+              with open(os.environ["STATUS"], encoding="utf-8") as f:
+                  status = json.load(f)
+          except (OSError, ValueError) as e:
+              print("::error::status.json publicado está ilegível: %s" % e)
+              raise SystemExit(1)
+          print(json.dumps(status, ensure_ascii=False, indent=1))
+          esperada = os.environ["DATA"]
+          piso = int(os.environ["PISO_PAGINAS"])
+          problemas = []
+          if status.get("data_referencia") != esperada:
+              problemas.append(
+                  "data_referencia no ar é %r; esta run publicou %r"
+                  % (status.get("data_referencia"), esperada)
+              )
+          paginas = status.get("paginas")
+          if not isinstance(paginas, int) or paginas < piso:
+              problemas.append("paginas no ar é %r; o piso é %d" % (paginas, piso))
+          for p in problemas:
+              print("::error::status.json publicado: " + p)
+          raise SystemExit(1 if problemas else 0)
+          PY
+
+          # grep -o e não grep -c: o sitemap sai numa linha só, e -c conta
+          # LINHAS - daria 1 até com o índice vazio. Três é o mínimo
+          # estrutural: um bloco de NCMs, um de atributos e um geral.
+          locs=$(curl -fsS "${base}sitemap.xml" | grep -o "<loc>" | wc -l)
+          echo "sitemap.xml: $locs <loc>"
+          [ "$locs" -ge 3 ] \
+            || erro "${base}sitemap.xml tem $locs <loc>; esperado ao menos 3"
+
+          # Sem -f de propósito: aqui o 404 É o resultado esperado, e --fail
+          # faria o curl sair 22. O "|| true" cobre o servidor fora do ar,
+          # em que curl sai 7 e escreve 000 - o -e do runner mataria o passo
+          # antes das mensagens.
+          codigo=$(curl -sS -o /dev/null -w "%{http_code}" \
+            "${base}404-que-nao-existe/" || true)
+          echo "404-que-nao-existe/: HTTP $codigo"
+          [ "$codigo" = "404" ] \
+            || erro "${base}404-que-nao-existe/ respondeu $codigo; esperado 404"
+
+          exit "$falhou"
+
+      # O dead-man switch de verdade. Todo alerta deste repositório - a issue
+      # do job "avisar", o vigia.yml - depende de o GitHub continuar rodando
+      # workflows aqui, e é exatamente isso que para de acontecer quando o
+      # cron é desativado por inatividade. O monitor externo funciona ao
+      # contrário: ele avisa por e-mail quando o ping NÃO chega no período
+      # configurado, então sobrevive ao repositório inteiro parar. Sem o
+      # secret o passo é pulado; se o ping falhar, o dia não se perde por isso.
+      - name: Avisar o monitor externo
+        if: env.HEALTHCHECKS_URL != ''
+        continue-on-error: true
+        run: curl -fsS -m 10 --retry 3 "$HEALTHCHECKS_URL"
 
   indexnow:
     needs: [coletar, publicar]

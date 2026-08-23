@@ -38,6 +38,8 @@ gerar_site.py   sem rede
                        config.json, templates/, fontes/
                 grava  site/                          HTML estático, sitemaps, feed,
                                             dados/viradas.{json,csv}
+                       site/status.json               prova de vida do build (fora
+                                                       do sitemap e do lastmod)
                        site/mudancas.txt              URLs que mudaram neste build
                        dados/lastmod.json             (versionado: é o que faz o
                                                        sitemap não mentir)
@@ -52,8 +54,8 @@ Quatro workflows no GitHub Actions:
 | workflow | quando | o que faz |
 |---|---|---|
 | **CI** (`ci.yml`) | todo push e pull request | `compileall` + suíte em Python 3.9 e 3.12; job de lint com `ruff` e cobertura (o único lugar com `pip`) |
-| **Coletar e publicar** (`coletar.yml`) | 06:00 BRT, resgate às 10:00 BRT, manual | testes → coleta → commit de `dados/` → release do bruto → render → commit do `lastmod` → Pages → IndexNow; abre/fecha issue `coleta-falhou` |
-| **Renderizar** (`render.yml`) | push em `main` que toca `templates/`, `fontes/`, `gerar_site.py`, `config.json`; manual | render e deploy **sem coleta**, a partir do `completo.json` em cache — ou reapurado do ZIP da última release |
+| **Coletar e publicar** (`coletar.yml`) | 06:00 BRT, resgate às 10:00 BRT, manual | testes → coleta → commit de `dados/` → release do bruto → render → commit do `lastmod` → Pages → conferência do que ficou no ar → ping do monitor externo → IndexNow; abre/fecha issue `coleta-falhou` |
+| **Renderizar** (`render.yml`) | push em `main` que toca `templates/`, `fontes/`, `gerar_site.py`, `config.json`; manual | render e deploy **sem coleta**, a partir do `completo.json` em cache — ou reapurado do ZIP da última release; mesma conferência pós-deploy |
 | **Vigia** (`vigia.yml`) | 12:00 BRT | homem morto: se o snapshot tem mais de dois dias, abre issue `vigia` |
 
 Sem servidor, sem banco, sem dependências: **só a biblioteca padrão do Python**, 3.9+ (o piso é o `zoneinfo`).
@@ -101,6 +103,7 @@ Dois scripts de verdade, dois auxiliares e um módulo comum; entre os scripts, n
 - **`comum.py`** é o que eles dividem: `Caminhos` (todo arquivo e pasta, derivados de uma raiz — é o que deixa os testes apontarem tudo para um diretório temporário), a escrita atômica (`.tmp` + `os.replace`, para nunca deixar um JSON pela metade em `dados/`), o único leitor de `config.json` e as funções de URL. Não toca a rede nem conhece o formato do catálogo.
 - **`coletor.py`** é o único que toca a rede. `apurar()` é pura — do JSON carregado ao que será gravado, com a validação de forma e o portão de sanidade no meio — e `gravar()` escreve; `coletar()` liga as duas, baixando ou lendo um ZIP do disco (`--de-arquivo`).
 - **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. O estado de uma geração vive num `Build` passado explicitamente a cada função. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato. O arquivo guarda também, sob `__templates__`, o hash de `templates/` e de `fontes/fontes.css`: quando ele muda (ou quando o `lastmod.json` não existe) o build é um *rebuild* — o HTML de toda página mudou sem que o dado tenha mudado — e `mudancas.txt` leva só a raiz. Fora disso leva todas as URLs que mudaram, sem teto.
+- **`site/status.json`** é a prova de vida do build, e o único arquivo do site deliberadamente volátil: traz `data_referencia`, `versao`, `gerado_em`, `paginas`, `viradas`, `proximo_corte` e `schema`. Fica **fora do sitemap e do `lastmod.json`** — `gerado_em` muda a cada build e carimbaria data nova todo dia numa URL que ninguém precisa indexar. É o que o passo *Conferir o que foi publicado* baixa da URL pública depois do deploy, para exigir que o site no ar seja o build desta run (a data certa e ao menos 5 000 páginas) em vez de um artifact velho ou um `base_path` errado.
 - **`indexnow.py`** e **`servir.py`** são invólucros finos. O primeiro avisa os buscadores das URLs em `mudancas.txt`; o segundo é preview.
 - **`dados/`** é o estado. Versionado em `main` por enquanto, escrito só pelo bot (ver [CONTRIBUTING.md](CONTRIBUTING.md) sobre por que nunca entra em branch de feature). `completo.json` e `bruto.zip` ficam de fora por tamanho e churn.
 
@@ -149,6 +152,12 @@ Um dia a Receita vai encolher a relação de verdade — uma reforma tira um ór
 - no GitHub: rodar **Coletar e publicar** à mão com o input `aceitar_queda` marcado.
 
 Com a válvula aberta, a queda rolante vira aviso e o snapshot sai marcado com `portao_ignorado: true`. Os **pisos absolutos e a `versao` continuam fatais**: a válvula aceita um catálogo menor, não um catálogo vazio.
+
+## Monitor externo
+
+Todo alerta deste repositório — a issue do job `avisar`, o `vigia.yml` — depende de o GitHub continuar rodando workflows aqui, e é exatamente isso que para quando o cron é desativado por inatividade: o vigia compartilha o modo de falha que vigia. O monitor externo funciona ao contrário — avisa quando o ping **não** chega. Para ligar: crie um check em [healthchecks.io](https://healthchecks.io) com período de 1 dia e graça de 12 h, copie a URL de ping e guarde-a em *Settings > Secrets and variables > Actions* como `HEALTHCHECKS_URL`. O último passo da publicação faz um `curl` nela; sem o secret o passo é pulado e nada muda.
+
+O ping é o **último** passo da publicação, depois da conferência: se o que ficou no ar não bate, ele nem chega a ser feito — e o monitor reclama sozinho. O que ele cobre e o `vigia.yml` não é o silêncio total: o cron do vigia desativado junto com o da coleta, o repositório arquivado, a conta sem minutos de Actions. O que ele **não** substitui: uma coleta que falha barulhentamente (é o job `avisar` quem abre a issue) nem um dado degenerado (é o portão de sanidade quem recusa gravar). Ele responde a uma pergunta só, e é a que ninguém mais faz: *o dia de hoje chegou ao fim da publicação?*
 
 ## Recuperar um dia perdido
 

@@ -118,11 +118,21 @@ def _arquivos(raiz):
 
 
 class TestSiteFecha(unittest.TestCase):
-    def _roda(self, base_path):
+    def _roda_em(self, base_path="/repo"):
+        """Gera o site inteiro numa raiz temporaria: (raiz, site, com_pagina).
+
+        A raiz interessa a quem confere dados/lastmod.json, que fica ao LADO
+        de site/ e nao dentro dele.
+        """
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         codigo, site, com_pagina = _monta(tmp.name, base_path)
         self.assertEqual(codigo, 0)
+        return tmp.name, site, com_pagina
+
+    def _roda(self, base_path):
+        """O caso comum: quem nao precisa da raiz so quer estes dois."""
+        _, site, com_pagina = self._roda_em(base_path)
         return site, com_pagina
 
     def test_com_base_path(self):
@@ -226,6 +236,31 @@ class TestSiteFecha(unittest.TestCase):
         self.assertIn('<link rel="canonical" href="https://exemplo.test/repo/">', home)
         self.assertIn('<meta property="og:url" content="https://exemplo.test/repo/">', home)
         self.assertNotIn("noindex", home)
+
+    def test_status_json_tem_as_chaves(self):
+        # O que a conferencia pos-deploy le da URL publica para saber se o
+        # que esta no ar e o build desta run, e nao um artifact velho.
+        raiz, site, _ = self._roda_em()
+        status = json.loads(_le(site, "status.json"))
+        self.assertEqual(status["data_referencia"], HOJE.isoformat())
+        self.assertEqual(status["schema"], 2)
+        self.assertGreater(status["viradas"], 0)
+        self.assertRegex(status["proximo_corte"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertTrue(status["gerado_em"].endswith("+00:00"))
+        # O piso de paginas do workflow so vale se este numero for o mesmo
+        # que o sitemap e o lastmod contam.
+        self.assertEqual(status["paginas"], len(_paginas_do_lastmod(_lastmod(raiz))))
+
+    def test_status_fora_do_sitemap_e_do_lastmod(self):
+        # "gerado_em" muda a cada build: dentro do lastmod ele carimbaria
+        # data nova todo dia e mandaria a URL ao IndexNow a toa. E um JSON
+        # de saude nao e conteudo para indexar.
+        raiz, site, _ = self._roda_em()
+        self.assertNotIn("/status.json", _lastmod(raiz))
+        for nome in os.listdir(site):
+            if nome.startswith("sitemap") and nome.endswith(".xml"):
+                self.assertNotIn("status.json", _le(site, nome), nome)
+        self.assertNotIn("status.json", _le(site, "mudancas.txt"))
 
     def test_paginas_com_virada_nao_mudam_de_hash_entre_dias(self):
         # Mesmas viradas, outro dia de referencia: "Faltam N dias" muda no
@@ -508,6 +543,13 @@ class TestSiteFecha(unittest.TestCase):
                 x = os.path.join(base, nome)
                 y = os.path.join(b, os.path.relpath(x, a))
                 self.assertTrue(os.path.exists(y), f"faltou {y}")
+                # status.json e o unico arquivo deliberadamente volatil: ele
+                # existe para provar QUANDO o build rodou, e por isso carrega
+                # "gerado_em". Fica fora do sitemap e do lastmod, entao a
+                # volatilidade nao contamina nada indexavel - e site/ nao e
+                # versionado, entao tambem nao vira churn de git.
+                if nome == "status.json":
+                    continue
                 with open(x, "rb") as f1, open(y, "rb") as f2:
                     self.assertEqual(f1.read(), f2.read(), f"difere: {nome}")
 

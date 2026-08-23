@@ -4,6 +4,15 @@ name: Vigia
 # ele não tem como avisar que deixou de rodar. O GitHub desativa cron de
 # repositório parado, e nesse caso o site fica no ar, bonito, servindo a
 # data de semanas atrás sem nenhum sinal de que parou.
+#
+# O QUE ELE NÃO COBRE, e é o próprio modo de falha que vigia: este cron é do
+# MESMO repositório, e o GitHub desativa todos juntos. Se a inatividade
+# desligar o cron da coleta, desliga o daqui também - e o silêncio fica
+# completo. Também não cobre o deploy: ele lê o dados/ultimo.json do
+# checkout, não o site publicado (o que está NO AR é conferido pelo passo
+# "Conferir o que foi publicado" do coletar.yml, com o site/status.json).
+# O único alerta que sobrevive ao repositório inteiro parar é o monitor
+# externo, fora do GitHub - ver "Monitor externo" no README.
 
 on:
   schedule:
@@ -53,7 +62,14 @@ jobs:
 
           O workflow de coleta não está falhando: ele não está rodando. Causa
           provável é o GitHub ter desativado o cron por inatividade no
-          repositório. O site continua no ar servindo dado velho."
+          repositório. O site continua no ar servindo dado velho.
+
+          Se o monitor externo estiver configurado (secret \`HEALTHCHECKS_URL\`,
+          ver 'Monitor externo' no README), ele também já deve ter avisado por
+          e-mail: o ping do fim da publicação parou de chegar. Se NÃO avisou,
+          desconfie do próprio monitor antes de desconfiar da coleta. E se
+          esta issue não existir num dia em que a coleta parou, o cron daqui
+          caiu junto com o dela - é o buraco que só o monitor externo tapa."
           if [ -n "$existente" ]; then
             gh issue comment "$existente" --repo "$REPO" --body "$corpo"
           else
