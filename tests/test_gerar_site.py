@@ -442,6 +442,104 @@ class TestHistorico(unittest.TestCase):
         self.assertIn("Nome do mapa, a partir de 01/01/2099", html)
         self.assertNotIn("ATT_NOVO", html)
 
+    def _virada(self, ncm, atributo, data, nome="N"):
+        return {"ncm": ncm, "atributo": atributo, "nome": nome, "vira_obrigatorio_em": data}
+
+    def _dois_dias(self, ontem, hoje):
+        self._grava("2026-08-21.json", json.dumps({"viradas": ontem}))
+        self._grava("2026-08-22.json", json.dumps({"viradas": hoje}))
+
+    def test_adiamento_aparece_em_prazos_alterados(self):
+        self._dois_dias(
+            [self._virada("1", "A", "2026-09-01", "Com pagina")],
+            [self._virada("1", "A", "2026-10-01", "Com pagina")],
+        )
+        html = self._bloco({"1"})
+        self.assertIn("<h3>Prazos alterados</h3>", html)
+        self.assertIn(
+            '<li><a href="/repo/ncm/1/">1</a> — Com pagina: de 01/09/2026 para '
+            "01/10/2026</li>",
+            html,
+        )
+        # O par não é nem novo nem sumido: só mudou de data.
+        self.assertNotIn("Viradas novas", html)
+        self.assertNotIn("Saíram da lista", html)
+        # Sem a página da NCM, texto - o site tem de continuar fechado.
+        self.assertIn(
+            "<li>1 — Com pagina: de 01/09/2026 para 01/10/2026</li>", self._bloco()
+        )
+
+    def test_antecipacao_tambem(self):
+        self._dois_dias(
+            [self._virada("1", "A", "2026-10-01")],
+            [self._virada("1", "A", "2026-09-01")],
+        )
+        html = self._bloco()
+        self.assertIn("<h3>Prazos alterados</h3>", html)
+        self.assertIn("<li>1 — N: de 01/10/2026 para 01/09/2026</li>", html)
+
+    def test_sem_alteracao_nao_emite_secao(self):
+        self._dois_dias(
+            [self._virada("1", "A", "2026-09-01")],
+            [self._virada("1", "A", "2026-09-01")],
+        )
+        self.assertEqual(self._bloco(), "")
+        # Com uma virada nova ao lado, a seção de prazos continua ausente.
+        self._grava(
+            "2026-08-22.json",
+            json.dumps(
+                {
+                    "viradas": [
+                        self._virada("1", "A", "2026-09-01"),
+                        self._virada("2", "B", "2099-01-01"),
+                    ]
+                }
+            ),
+        )
+        html = self._bloco()
+        self.assertIn("Viradas novas", html)
+        self.assertNotIn("Prazos alterados", html)
+
+    def test_prazo_alterado_compara_com_a_ultima_data_vista(self):
+        # O adiamento foi notícia no dia 21 (de 09 para 10). No dia 22 a data
+        # é a mesma do dia 21: não há nada novo a dizer, mesmo que o dia 20
+        # ainda esteja na janela com a data antiga.
+        self._grava(
+            "2026-08-20.json",
+            json.dumps({"viradas": [self._virada("1", "A", "2026-09-01")]}),
+        )
+        self._dois_dias(
+            [self._virada("1", "A", "2026-10-01")],
+            [self._virada("1", "A", "2026-10-01")],
+        )
+        self.assertEqual(self._bloco(), "")
+
+    def test_prazos_alterados_em_lote(self):
+        # Um lote adiado de uma vez é UM item, como na home e no feed - e o
+        # nome vira link quando o atributo tem página.
+        n = g.LIMIAR_LOTE + 1
+        ontem = [
+            self._virada(f"9001.{i:02d}.00", "ATT_L", "2027-01-01", "Lote")
+            for i in range(n)
+        ]
+        hoje = [dict(v, vira_obrigatorio_em="2027-07-01") for v in ontem]
+        self._dois_dias(ontem, hoje)
+        self.build.com_pagina = {"ATT_L"}
+        html = self._bloco()
+        self.assertIn(
+            f'<li><a href="/repo/atributos/ATT_L/">Lote</a> de 01/01/2027 para '
+            f"01/07/2027 em {n} NCMs</li>",
+            html,
+        )
+        self.assertEqual(html.count("<li>"), 1)
+
+    def test_data_ausente_nao_e_alteracao(self):
+        self._dois_dias(
+            [{"ncm": "1", "atributo": "A", "nome": "N"}],
+            [self._virada("1", "A", "2026-09-01")],
+        )
+        self.assertEqual(self._bloco(), "")
+
     def test_primeira_vista_e_a_data_mais_antiga(self):
         virada = {"ncm": "1", "atributo": "A", "vira_obrigatorio_em": "2099-01-01"}
         adiada = dict(virada, vira_obrigatorio_em="2099-02-01")

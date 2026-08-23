@@ -22,7 +22,7 @@ python -m ruff format --check .            # ou `ruff format .` para aplicar
 
 ## Testes
 
-- **Obrigatórios e rápidos.** A suíte inteira roda em cerca de 3 s e **nunca toca a rede** — `tests/apoio.py` faz `urlopen` levantar em todo módulo de teste (`proibir_rede()` no `setUpModule`), o coletor é testado com respostas falsas e a fixture em `tests/fixtures/`. Um teste que precise de internet fica vermelho, não lento.
+- **Obrigatórios e rápidos.** A suíte inteira roda em cerca de 4 s e **nunca toca a rede** — `tests/apoio.py` faz `urlopen` levantar em todo módulo de teste (`proibir_rede()` no `setUpModule`), o coletor é testado com respostas falsas e a fixture em `tests/fixtures/`. Um teste que precise de internet fica vermelho, não lento.
 - **Ambiente de teste é `apoio.ambiente(tmp)`**: devolve um `Caminhos` num diretório temporário com templates, fontes e `config.json`; `apoio.montar_dados()` produz `dados/` pelo mesmo caminho da produção (`apurar` + `gravar`). Não remonte o snapshot à mão.
 - Todo bug corrigido ganha um teste com nome que diz o que ele prova (`test_colheita_degenerada_nao_grava_nada`).
 - `tests/test_integridade.py` gera o site inteiro a partir da fixture e confere todo link interno. Se você mexeu em template, é ele que vai te pegar.

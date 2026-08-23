@@ -610,12 +610,19 @@ def indice_por_atributo(dados):
     return por_atributo
 
 
-def atributos_publicaveis(dados, lista_viradas, max_ncms=60):
+def atributos_publicaveis(dados, lista_viradas, max_ncms=60, permanentes=frozenset()):
     """Todo atributo que merece página própria.
 
-    Entram, sempre: os das viradas e os citados por NCM afetada - senão as
-    páginas daquelas NCMs linkariam para o vazio. Os demais entram pelo
-    filtro de qualidade.
+    Entram, sempre: os das viradas, os citados por NCM afetada - senão as
+    páginas daquelas NCMs linkariam para o vazio - e os `permanentes`, que
+    já tiveram página algum dia. Os demais entram pelo filtro de qualidade.
+
+    A garantia dos permanentes existe porque a virada passa: no dia seguinte
+    ao corte a NCM deixa de ser afetada, o atributo deixa de ser forçado e a
+    página que o sitemap anunciou por semanas virava 404. Página que já
+    existiu continua existindo - desde que o atributo ainda exista em
+    detalhesAtributos; sem dado não há o que publicar, e um atributo que a
+    Receita removeu de vez sai.
     """
     dic = dicionario_atributos(dados)
     por_atributo = indice_por_atributo(dados)
@@ -627,9 +634,13 @@ def atributos_publicaveis(dados, lista_viradas, max_ncms=60):
     for ncm in lista_ncms(dados):
         if ncm["codigoNcm"] in alvo:
             obrigatorios |= {v["codigo"] for v in vinculos_de(ncm)}
+    # Um permanente que perdeu todos os vínculos mas continua no dicionário
+    # ganha a página com zero NCMs: é o que há para dizer, e a URL não morre.
+    obrigatorios |= {codigo for codigo in permanentes if codigo in dic}
 
     saida = []
-    for codigo, ncms in sorted(por_atributo.items()):
+    for codigo in sorted(set(por_atributo) | obrigatorios):
+        ncms = por_atributo.get(codigo, [])
         detalhe = dic.get(codigo)
         if codigo not in obrigatorios:
             if not merece_pagina(detalhe, len(ncms), repeticoes[assinatura_prosa(detalhe)]):
@@ -891,6 +902,49 @@ def contagens_anteriores(caminho):
     return c
 
 
+def catalogo_anterior(caminho):
+    """O último atributos.json gravado, ou None.
+
+    É de onde apurar() herda as páginas permanentes. Ilegível vira aviso,
+    pelo mesmo motivo de snapshot_anterior(): abortar aqui deixaria o
+    arquivo quebrado no lugar para sempre, e o custo de perdê-lo é um dia
+    de páginas a menos - que o run seguinte não recupera sozinho, por isso
+    o aviso é alto.
+    """
+
+    def ilegivel(e):
+        avisar(f"catálogo anterior ilegível ({e}); páginas permanentes perdidas")
+
+    catalogo = comum.ler_json_tolerante(caminho, avisar=ilegivel)
+    if catalogo is None:
+        return None
+    if not isinstance(catalogo, dict):
+        avisar("catálogo anterior não é um objeto JSON; páginas permanentes perdidas")
+        return None
+    return catalogo
+
+
+def _permanentes_de(catalogo):
+    """(códigos com página garantida, aviso) de um catálogo já carregado.
+
+    Catálogo de antes desta chave existir é o caso normal do primeiro run
+    depois da mudança: nada a herdar, sem aviso. Chave com forma errada é
+    ignorada com aviso, para não derrubar a coleta por causa de um arquivo
+    derivado.
+    """
+    if catalogo is None:
+        return frozenset(), None
+    lista = catalogo.get("paginas_permanentes")
+    if lista is None:
+        return frozenset(), None
+    if not isinstance(lista, list) or not all(isinstance(c, str) for c in lista):
+        return (
+            frozenset(),
+            "paginas_permanentes do catálogo anterior com forma inválida; ignorada",
+        )
+    return frozenset(lista), None
+
+
 def versao_regrediu(atual, anterior):
     """True só quando as duas versões são numéricas e a nova é menor."""
     a, b = str(atual or ""), str(anterior or "")
@@ -921,23 +975,35 @@ class Apuracao:
     avisos: list
 
 
-def apurar(dados, ref, meta_http, snapshot_anterior=None, aceitar_queda=False):
+def apurar(
+    dados,
+    ref,
+    meta_http,
+    snapshot_anterior=None,
+    aceitar_queda=False,
+    catalogo_anterior=None,
+):
     """Do JSON carregado ao que será gravado. Pura: sem rede, sem disco.
 
     Valida a forma, calcula as contagens, passa pelo portão de sanidade
     (levanta RuntimeError se a colheita estiver degenerada) e monta o
     snapshot, o catálogo e o mapa completo. `meta_http` é o que baixar() ou
-    ler_bruto() registrou; `snapshot_anterior` é a base rolante do portão.
-    Chaves do snapshot que existem para o workflow ler: "bruto_novo" (o JSON
-    de hoje difere do de ontem: vale subir o ZIP como asset de Release),
-    "conteudo_identico" (é o mesmo JSON de ontem), "portao_ignorado" (uma
-    queda rolante foi aceita pela válvula), "invariantes_falhas".
+    ler_bruto() registrou; `snapshot_anterior` é a base rolante do portão;
+    `catalogo_anterior` é o atributos.json de ontem, de onde vêm as páginas
+    permanentes. Chaves do snapshot que existem para o workflow ler:
+    "bruto_novo" (o JSON de hoje difere do de ontem: vale subir o ZIP como
+    asset de Release), "conteudo_identico" (é o mesmo JSON de ontem),
+    "portao_ignorado" (uma queda rolante foi aceita pela válvula),
+    "invariantes_falhas".
     """
     validar_forma(dados)
     avisos = []
     meta = dict(meta_http)
 
     contagens_antes, aviso = _contagens_de(snapshot_anterior)
+    if aviso:
+        avisos.append(aviso)
+    permanentes_antes, aviso = _permanentes_de(catalogo_anterior)
     if aviso:
         avisos.append(aviso)
     c = contagens(dados, ref)
@@ -969,13 +1035,17 @@ def apurar(dados, ref, meta_http, snapshot_anterior=None, aceitar_queda=False):
     # arquivo em disco preso à regra antiga até a Receita publicar versão
     # nova (888 páginas de atributo em vez de 391). O recálculo custa
     # décimos de segundo; a economia de escrita fica em gravar().
-    publicaveis = atributos_publicaveis(dados, vs)
+    publicaveis = atributos_publicaveis(dados, vs, permanentes=permanentes_antes)
+    com_pagina = {a["codigo"] for a in publicaveis}
     catalogo = {
         "versao": dados.get("versao"),
         "atributos": publicaveis,
         "orgaos": orgaos(publicaveis),
+        # Monotônica: união com o dia anterior, nunca só o de hoje. Um código
+        # que a Receita tirou fica na lista sem gerar página - e volta a ter
+        # página no dia em que o atributo voltar, sem pedir virada nova.
+        "paginas_permanentes": sorted(permanentes_antes | com_pagina),
     }
-    com_pagina = {a["codigo"] for a in publicaveis}
 
     snapshot = {
         "schema": SCHEMA,
@@ -1055,7 +1125,14 @@ def coletar(caminhos=None, referencia=None, origem=None, aceitar_queda=None):
     ref = referencia or hoje_br()
 
     anterior = snapshot_anterior(caminhos.ultimo)
-    apuracao = apurar(dados, ref, baixado.meta, anterior, aceitar_queda=aceitar_queda)
+    apuracao = apurar(
+        dados,
+        ref,
+        baixado.meta,
+        anterior,
+        aceitar_queda=aceitar_queda,
+        catalogo_anterior=catalogo_anterior(caminhos.atributos),
+    )
     for aviso in apuracao.avisos:
         avisar(aviso)
     return gravar(apuracao, caminhos, baixado.bruto)

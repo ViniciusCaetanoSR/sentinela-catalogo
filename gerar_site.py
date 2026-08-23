@@ -927,9 +927,13 @@ def bloco_historico(build, referencia):
 
     O endpoint oficial ignora ?data= e não serve versões passadas: sem este
     arquivo local não existe 'o que mudou'. E também o que impede a página de
-    ficar vazia entre um lote de viradas e o próximo. As NCMs em
-    build.ncms_com_pagina viram link; as demais (uma NCM que saiu do
-    Catálogo) ficam como texto, para o site continuar fechado.
+    ficar vazia entre um lote de viradas e o próximo. Três listas, todas por
+    par (ncm, atributo): quem apareceu hoje, quem estava e não está mais, e
+    quem continua mas com outra data de virada - o adiamento (ou a
+    antecipação) que, para quem mantém o catálogo, é a notícia que mais
+    muda o plano. As NCMs em build.ncms_com_pagina viram link; as demais
+    (uma NCM que saiu do Catálogo) ficam como texto, para o site continuar
+    fechado.
     """
     arquivos = arquivos_historico(build.caminhos.historico, referencia, JANELA_HISTORICO)
     if len(arquivos) < 2:
@@ -938,6 +942,11 @@ def bloco_historico(build, referencia):
     atual = _snapshot_historico(arquivos[-1][1])
     if not atual:
         return ""
+    # Por par (ncm, atributo), o nome e a ÚLTIMA data de virada vista antes
+    # de hoje - os arquivos vêm em ordem, o mais recente sobrescreve. É com
+    # essa data que a de hoje é comparada: um adiamento é notícia no dia em
+    # que aparece, e comparar com a primeira data do histórico repetiria a
+    # notícia por trinta dias.
     vistos_antes = {}
     for _, caminho in arquivos[:-1]:
         antigo = _snapshot_historico(caminho)
@@ -945,7 +954,10 @@ def bloco_historico(build, referencia):
             continue
         for v in antigo["viradas"]:
             if v.get("ncm") and v.get("atributo"):
-                vistos_antes[(v["ncm"], v["atributo"])] = v.get("nome")
+                vistos_antes[(v["ncm"], v["atributo"])] = {
+                    "nome": v.get("nome"),
+                    "data": v.get("vira_obrigatorio_em"),
+                }
 
     agora = {
         (v["ncm"], v["atributo"]): v
@@ -954,8 +966,9 @@ def bloco_historico(build, referencia):
     }
     novas = [v for k, v in agora.items() if k not in vistos_antes]
     sumiram = sorted(k for k in vistos_antes if k not in agora)
+    alterados = prazos_alterados(vistos_antes, agora)
 
-    if not novas and not sumiram:
+    if not novas and not sumiram and not alterados:
         return ""
 
     def item(ncm, texto):
@@ -1004,7 +1017,7 @@ def bloco_historico(build, referencia):
         itens = "".join(
             item_lote(
                 c,
-                vistos_antes.get((por_atributo[c][0], c)),
+                vistos_antes[(por_atributo[c][0], c)]["nome"],
                 f"saiu da lista para {milhar(len(por_atributo[c]))} NCMs",
             )
             for c in sorted(em_lote)
@@ -1012,14 +1025,55 @@ def bloco_historico(build, referencia):
         # Mostra o NOME, como a lista de cima. Antes esta mostrava o código
         # cru (ATT_13241) para o mesmo conceito.
         itens += "".join(
-            item(n, vistos_antes.get((n, c)) or c) for n, c in sumiram if c not in em_lote
+            item(n, vistos_antes[(n, c)]["nome"] or c)
+            for n, c in sumiram
+            if c not in em_lote
         )
         partes.append(
             "<h3>Saíram da lista</h3><p style='font-size:.92rem;color:var(--muted)'>"
             "Já passaram da data ou foram removidas pela Receita.</p>"
             f"<ul>{itens}</ul>"
         )
+    if alterados:
+        # Agrupado por (atributo, de, para): um lote que a Receita adiou de
+        # uma vez é um item, como na home. O texto é neutro de propósito -
+        # "de X para Y" cobre adiamento e antecipação sem inventar um verbo.
+        grupos = {}
+        for (n, c), antes, depois in alterados:
+            grupos.setdefault((c, antes, depois), []).append(n)
+        itens = ""
+        for (c, antes, depois), ns in sorted(grupos.items()):
+            nome = agora[(ns[0], c)].get("nome") or c
+            mudanca = f"de {br(antes)} para {br(depois)}"
+            if len(ns) > LIMIAR_LOTE:
+                itens += item_lote(c, nome, f"{mudanca} em {milhar(len(ns))} NCMs")
+            else:
+                itens += "".join(item(n, f"{nome}: {mudanca}") for n in ns)
+        partes.append(
+            "<h3>Prazos alterados</h3><p style='font-size:.92rem;color:var(--muted)'>"
+            "A mesma virada, com outra data.</p>"
+            f"<ul>{itens}</ul>"
+        )
     return "".join(partes)
+
+
+def prazos_alterados(vistos_antes, agora):
+    """[((ncm, atributo), data_antes, data_agora)] dos pares que mudaram de data.
+
+    Só pares presentes nos dois lados: quem entrou é "virada nova", quem
+    saiu é "saiu da lista". Data ausente num dos lados não é alteração - é
+    um snapshot capenga, e não vale uma linha na página. Ordenado por NCM e
+    atributo, como as outras listas.
+    """
+    saida = []
+    for chave in sorted(agora):
+        antes = vistos_antes.get(chave)
+        if not antes:
+            continue
+        de, para = antes.get("data"), agora[chave].get("vira_obrigatorio_em")
+        if de and para and de != para:
+            saida.append((chave, de, para))
+    return saida
 
 
 # ---------------------------------------------------------------- páginas
@@ -1667,6 +1721,10 @@ def gerar_atributos(build):
                 f"Este atributo está vinculado a {milhar(a['total_ncms'])} "
                 f"NCMs. As {len(mostradas)} primeiras:"
             )
+        elif not a["total_ncms"]:
+            # Página permanente de um atributo que perdeu todos os vínculos:
+            # "vinculado a 0 NCMs:" seguido de nada não é frase.
+            aplicacao = "Este atributo não está vinculado a nenhuma NCM no momento."
         else:
             aplicacao = (
                 f"Este atributo está vinculado a "

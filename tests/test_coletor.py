@@ -241,6 +241,148 @@ class TestFiltroDePagina(unittest.TestCase):
         )
 
 
+def _com_virada_no_clone(dados, data="2026-08-22"):
+    """ATT_CLONE_A ganha uma virada: o único jeito de ele ter página é ser
+    forçado - vale para uma NCM e a prosa é boilerplate. Devolve `dados`."""
+    for ncm in dados["listaNcm"]:
+        for v in ncm.get("listaAtributos") or []:
+            if v.get("codigo") == "ATT_CLONE_A":
+                v["dataFimVigencia"] = data
+    return dados
+
+
+class TestPaginasPermanentes(unittest.TestCase):
+    """Página de atributo que já existiu continua existindo.
+
+    Sem isto, um atributo forçado por uma virada (ou citado por uma NCM com
+    virada) perdia a página no dia seguinte ao corte - depois de semanas no
+    sitemap. ATT_17220/17280/17300/2548 estavam nessa situação em 30/08.
+    """
+
+    DIA_SEGUINTE = date(2026, 8, 23)
+
+    def _apura(self, dados, referencia, catalogo_anterior=None):
+        with mock.patch.object(coletor, "PISO", apoio.PISO_BAIXO):
+            return coletor.apurar(
+                dados,
+                referencia,
+                apoio.meta_de(dados, referencia),
+                catalogo_anterior=catalogo_anterior,
+            )
+
+    def test_dia_1_com_virada_publica_e_registra_o_permanente(self):
+        apuracao = self._apura(_com_virada_no_clone(amostra()), HOJE)
+        self.assertIn("ATT_CLONE_A", apuracao.com_pagina)
+        self.assertIn("ATT_CLONE_A", apuracao.catalogo["paginas_permanentes"])
+        # Todo publicável de hoje entra: a lista é a união com o dia anterior.
+        self.assertEqual(
+            apuracao.catalogo["paginas_permanentes"], sorted(apuracao.com_pagina)
+        )
+
+    def test_dia_2_sem_virada_mantem_a_pagina(self):
+        dia_1 = self._apura(_com_virada_no_clone(amostra()), HOJE)
+        # Sem o catálogo anterior, a regra de qualidade corta o clone de novo.
+        sem_memoria = self._apura(_com_virada_no_clone(amostra()), self.DIA_SEGUINTE)
+        self.assertNotIn("ATT_CLONE_A", sem_memoria.com_pagina)
+        dia_2 = self._apura(
+            _com_virada_no_clone(amostra()), self.DIA_SEGUINTE, dia_1.catalogo
+        )
+        self.assertIn("ATT_CLONE_A", dia_2.com_pagina)
+        self.assertIn("ATT_CLONE_A", dia_2.catalogo["paginas_permanentes"])
+        self.assertEqual(
+            dia_2.catalogo["paginas_permanentes"], dia_1.catalogo["paginas_permanentes"]
+        )
+        # Permanente não é virada: o índice "com virada agendada" não o lista.
+        por_codigo = {a["codigo"]: a for a in dia_2.catalogo["atributos"]}
+        self.assertFalse(por_codigo["ATT_CLONE_A"]["nas_viradas"])
+
+    def test_atributo_que_sumiu_do_arquivo_nao_entra(self):
+        dia_1 = self._apura(_com_virada_no_clone(amostra()), HOJE)
+        dados = amostra()
+        dados["detalhesAtributos"] = [
+            d for d in dados["detalhesAtributos"] if d.get("codigo") != "ATT_CLONE_A"
+        ]
+        for ncm in dados["listaNcm"]:
+            ncm["listaAtributos"] = [
+                v
+                for v in ncm.get("listaAtributos") or []
+                if v.get("codigo") != "ATT_CLONE_A"
+            ]
+        dia_2 = self._apura(dados, self.DIA_SEGUINTE, dia_1.catalogo)
+        self.assertNotIn("ATT_CLONE_A", dia_2.com_pagina)
+        # Fica na memória: se a Receita devolver o atributo, a página volta.
+        self.assertIn("ATT_CLONE_A", dia_2.catalogo["paginas_permanentes"])
+
+    def test_permanente_sem_vinculo_ganha_pagina_com_zero_ncms(self):
+        # ATT_ORFAO existe em detalhesAtributos sem nenhuma NCM: por si só
+        # não merece página (test_orfao_de_vinculo_nao_vira_pagina), mas se
+        # já teve uma, ela fica - com o que há para dizer.
+        apuracao = self._apura(amostra(), HOJE, {"paginas_permanentes": ["ATT_ORFAO"]})
+        por_codigo = {a["codigo"]: a for a in apuracao.catalogo["atributos"]}
+        self.assertIn("ATT_ORFAO", por_codigo)
+        self.assertEqual(por_codigo["ATT_ORFAO"]["total_ncms"], 0)
+        self.assertEqual(por_codigo["ATT_ORFAO"]["ncms"], [])
+
+    def test_catalogo_anterior_sem_a_chave_e_silencioso(self):
+        # O primeiro run depois desta mudança lê um atributos.json sem a chave.
+        apuracao = self._apura(amostra(), HOJE, {"versao": "999", "atributos": []})
+        self.assertEqual(apuracao.avisos, [])
+        self.assertEqual(
+            apuracao.catalogo["paginas_permanentes"], sorted(apuracao.com_pagina)
+        )
+
+    def test_chave_com_forma_errada_vira_aviso(self):
+        apuracao = self._apura(amostra(), HOJE, {"paginas_permanentes": "ATT_X"})
+        self.assertTrue(any("paginas_permanentes" in a for a in apuracao.avisos))
+        apuracao = self._apura(amostra(), HOJE, {"paginas_permanentes": [1, 2]})
+        self.assertTrue(any("paginas_permanentes" in a for a in apuracao.avisos))
+
+    def test_atributos_publicaveis_aceita_o_conjunto_direto(self):
+        dados = amostra()
+        vs = coletor.viradas(dados, self.DIA_SEGUINTE)
+        sem = {a["codigo"] for a in coletor.atributos_publicaveis(dados, vs)}
+        com = {
+            a["codigo"]
+            for a in coletor.atributos_publicaveis(
+                dados, vs, permanentes=frozenset({"ATT_CLONE_B", "ATT_INEXISTENTE"})
+            )
+        }
+        self.assertEqual(com - sem, {"ATT_CLONE_B"})
+
+
+class TestCatalogoAnterior(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.caminho = os.path.join(tmp.name, "atributos.json")
+
+    def _le(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            return coletor.catalogo_anterior(self.caminho), err.getvalue()
+
+    def test_ausente_e_none_sem_aviso(self):
+        self.assertEqual(self._le(), (None, ""))
+
+    def test_ilegivel_vira_aviso(self):
+        with open(self.caminho, "w", encoding="utf-8") as f:
+            f.write("{ nao e json")
+        catalogo, err = self._le()
+        self.assertIsNone(catalogo)
+        self.assertIn("::warning::catálogo anterior ilegível", err)
+
+    def test_nao_objeto_vira_aviso(self):
+        with open(self.caminho, "w", encoding="utf-8") as f:
+            f.write("[1, 2]")
+        catalogo, err = self._le()
+        self.assertIsNone(catalogo)
+        self.assertIn("::warning::catálogo anterior não é um objeto", err)
+
+    def test_legivel_volta_inteiro(self):
+        with open(self.caminho, "w", encoding="utf-8") as f:
+            json.dump({"paginas_permanentes": ["ATT_X"]}, f)
+        self.assertEqual(self._le(), ({"paginas_permanentes": ["ATT_X"]}, ""))
+
+
 class TestMapaCompleto(unittest.TestCase):
     def setUp(self):
         self.dados = amostra()
@@ -998,6 +1140,25 @@ class TestColetarFimAFim(unittest.TestCase):
             corrigido = json.load(f)
         self.assertNotIn("atualizado_em", corrigido)
         self.assertNotIn("ATT_REGRA_ANTIGA", {a["codigo"] for a in corrigido["atributos"]})
+
+    def test_pagina_de_atributo_sobrevive_ao_corte_entre_dois_runs(self):
+        # Dia 22: ATT_CLONE_A vira hoje e ganha página. Dia 23: a virada
+        # passou; sem memória o clone era cortado e a URL virava 404. O
+        # coletor lê o atributos.json de ontem e mantém a página.
+        primeiro, _ = self._coletar(_com_virada_no_clone(amostra()))
+        self.assertIn("ATT_CLONE_A", {v["atributo"] for v in primeiro["viradas"]})
+        segundo, _ = self._coletar(
+            _com_virada_no_clone(amostra()), referencia=date(2026, 8, 23)
+        )
+        self.assertNotIn("ATT_CLONE_A", {v["atributo"] for v in segundo["viradas"]})
+        with open(os.path.join(self.dir, "atributos.json"), encoding="utf-8") as f:
+            catalogo = json.load(f)
+        self.assertIn("ATT_CLONE_A", {a["codigo"] for a in catalogo["atributos"]})
+        self.assertIn("ATT_CLONE_A", catalogo["paginas_permanentes"])
+        # A lista não encolhe: é o mesmo conjunto de ontem.
+        self.assertEqual(
+            segundo["atributos_publicaveis"], primeiro["atributos_publicaveis"]
+        )
 
     def test_catalogo_sumido_do_disco_volta_no_run_seguinte(self):
         self._coletar(amostra())

@@ -416,6 +416,71 @@ class TestSiteFecha(unittest.TestCase):
         _monta(tmp.name, "/repo")
         self.assertEqual(primeiro, _lastmod(tmp.name))
 
+    def test_pagina_de_atributo_nao_vira_404_depois_do_corte(self):
+        # Dia 22: ATT_CLONE_A vira hoje e ganha página - só por isso: vale
+        # para uma NCM e a prosa é boilerplate. Dia 23: a virada passou. A
+        # página fica - o sitemap a anunciou - e o site continua fechado.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        dados = apoio.amostra()
+        for ncm in dados["listaNcm"]:
+            for v in ncm.get("listaAtributos") or []:
+                if v.get("codigo") == "ATT_CLONE_A":
+                    v["dataFimVigencia"] = "2026-08-22"
+        _, site, com_pagina_antes = _monta(
+            tmp.name, "/repo", referencia=date(2026, 8, 22), dados=dados
+        )
+        self.assertIn("ATT_CLONE_A", com_pagina_antes)
+        _, site, com_pagina_depois = _monta(
+            tmp.name, "/repo", referencia=date(2026, 8, 23), dados=dados
+        )
+        self.assertTrue(com_pagina_antes <= com_pagina_depois)
+        self.assertTrue(
+            os.path.exists(os.path.join(site, "atributos", "ATT_CLONE_A", "index.html"))
+        )
+        catalogo = json.loads(_le(tmp.name, "dados", "atributos.json"))
+        self.assertEqual(catalogo["paginas_permanentes"], sorted(com_pagina_depois))
+        self._confere_fechado(site, "/repo")
+
+    def test_permanente_sem_vinculo_rende_pagina_e_o_site_fecha(self):
+        # ATT_ORFAO existe em detalhesAtributos sem nenhuma NCM. Herdado como
+        # permanente, ganha página com zero NCMs - sem "vinculado a 0 NCMs:"
+        # seguido de nada - e nenhum link do site aponta para o vazio.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        caminhos = comum.Caminhos(raiz=tmp.name)
+        os.makedirs(caminhos.dados, exist_ok=True)
+        with open(caminhos.atributos, "w", encoding="utf-8") as f:
+            json.dump({"paginas_permanentes": ["ATT_ORFAO"]}, f)
+        _, site, com_pagina = _monta(tmp.name, "/repo")
+        self.assertIn("ATT_ORFAO", com_pagina)
+        html = _le(site, "atributos", "ATT_ORFAO", "index.html")
+        self.assertIn("não está vinculado a nenhuma NCM no momento", html)
+        self.assertNotIn("0 NCMs:", html)
+        self._confere_fechado(site, "/repo")
+
+    def test_prazo_alterado_aparece_na_home(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _monta(tmp.name, "/repo", referencia=date(2026, 8, 22))
+        dados = apoio.amostra()
+        for ncm in dados["listaNcm"]:
+            for v in ncm.get("listaAtributos") or []:
+                if v.get("codigo") == "ATT_FUTURO":
+                    v["dataFimVigencia"] = "2099-06-30"
+        _, site, _ = _monta(tmp.name, "/repo", referencia=date(2026, 8, 23), dados=dados)
+        home = _le(site, "index.html")
+        self.assertIn("<h3>Prazos alterados</h3>", home)
+        self.assertIn(
+            '<li><a href="/repo/ncm/8415.10.90/">8415.10.90</a> — Referência de '
+            "licenciamento: de 31/12/2099 para 30/06/2099</li>",
+            home,
+        )
+        # Nem nova nem sumida: só mudou de data.
+        self.assertNotIn("<h3>Viradas novas</h3>", home)
+        self.assertNotIn("Referência de licenciamento, a partir de", home)
+        self._confere_fechado(site, "/repo")
+
     def test_prazo_vencido_aparece_na_ncm(self):
         # ATT_HOJE vira em 22/08. No dia 23 a Receita deveria ter trocado
         # obrigatorio para true; a fixture mantem false - e a pagina diz

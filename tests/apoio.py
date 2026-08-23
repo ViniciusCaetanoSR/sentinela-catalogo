@@ -157,7 +157,13 @@ def montar_dados(caminhos, dados, referencia, ajustar=None, meta_http=None):
     """
     anterior = coletor.snapshot_anterior(caminhos.ultimo)
     meta = meta_http or meta_de(dados, referencia)
-    apuracao = coletor.apurar(dados, referencia, meta, anterior)
+    apuracao = coletor.apurar(
+        dados,
+        referencia,
+        meta,
+        anterior,
+        catalogo_anterior=coletor.catalogo_anterior(caminhos.atributos),
+    )
     if ajustar:
         ajustar(apuracao.snapshot, apuracao.catalogo, apuracao.completo)
     coletor.gravar(apuracao, caminhos)

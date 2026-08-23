@@ -24,6 +24,7 @@ comum.py        o que os scripts dividem: caminhos, escrita atômica, config.jso
 
 coletor.py      baixa o ZIP oficial e apura (ou lê um ZIP do disco: --de-arquivo)
                 lê     dados/ultimo.json              (base rolante do portão)
+                       dados/atributos.json           (páginas permanentes de ontem)
                 grava  dados/bruto.zip                o ZIP como veio (NÃO versionado)
                        dados/ultimo.json              snapshot do dia
                        dados/historico/AAAA-MM-DD.json
@@ -63,7 +64,7 @@ python coletor.py                         # baixa o ZIP oficial e apura (bate na
 python coletor.py --de-arquivo bruto.zip  # apura um ZIP já baixado — sem rede
 python gerar_site.py                      # gera site/ a partir de dados/ — sem rede
 python servir.py                          # http://localhost:8000/sentinela-catalogo/
-python -m unittest discover -s tests -v   # ~260 testes em cerca de 3 s, sem rede
+python -m unittest discover -s tests -v   # ~300 testes em cerca de 4 s, sem rede
 ```
 
 Os dois scripts principais aceitam argumentos para não tocar no `dados/` e no `site/` do repositório:
@@ -118,6 +119,8 @@ Três coisas acontecem no navegador (`templates/app.js`), não no build, e todas
 - **"Ir para a NCM"** (home, `/ncm/` e 404) é um form sem backend: `84151090`, `8415.10.90` e `8415 10 90` levam à mesma página; 4 a 7 dígitos levam ao capítulo. Sem JS o envio cai no índice por capítulo. A página de erro também reconhece `/ncm/84151090/` e redireciona para a forma pontuada.
 
 Um atributo só ganha página própria se tiver algo próprio a dizer. Os que valem para **uma única NCM** e cuja prosa é boilerplate repetido — 586 atributos chamados "Destaque", com a mesma orientação de 31 caracteres — não ganham: o conteúdo deles aparece dentro da página da NCM, que é onde ele sempre pertenceu. Sem esse corte, dois terços do site eram quase-duplicatas e as 888 páginas de atributo produziam 118 títulos distintos.
+
+A exceção ao corte é a virada: todo atributo com virada agendada, e todo atributo citado por uma NCM com virada, ganha página enquanto a virada dura. E **página que já existiu continua existindo**: `dados/atributos.json` guarda em `paginas_permanentes` a união de tudo o que já foi publicado, e o coletor a herda de um dia para o outro. Sem isso, no dia seguinte ao corte a página sumia — 404 numa URL que o sitemap anunciou por semanas. Só some a página de um atributo que a Receita removeu do arquivo: sem dado não há o que publicar.
 
 ### Modo lote
 
