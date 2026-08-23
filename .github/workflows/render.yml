@@ -35,6 +35,34 @@ jobs:
         with:
           fetch-depth: 1
 
+      # O mesmo par de variáveis do coletar.yml, pelo mesmo motivo: com a
+      # variável de repositório BRANCH_DADOS vazia isto é o comportamento de
+      # sempre (dados/ dentro do checkout de main, push na branch do
+      # checkout); preenchida, o dado vem da branch órfã. O comentário longo
+      # está lá.
+      - name: Onde ficam os dados
+        env:
+          BRANCH_DADOS: ${{ vars.BRANCH_DADOS }}
+          REF: ${{ github.ref_name }}
+        run: |
+          if [ -n "$BRANCH_DADOS" ]; then
+            echo "DIR_DADOS=dados-branch" >> "$GITHUB_ENV"
+            echo "BRANCH_ALVO=$BRANCH_DADOS" >> "$GITHUB_ENV"
+          else
+            echo "DIR_DADOS=dados" >> "$GITHUB_ENV"
+            echo "BRANCH_ALVO=$REF" >> "$GITHUB_ENV"
+          fi
+
+      # Antes do cache, e não depois: actions/checkout limpa o diretório que
+      # recebe, e o cache do completo.json cai dentro dele.
+      - name: Trazer a branch de dados
+        if: vars.BRANCH_DADOS != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.BRANCH_DADOS }}
+          path: dados-branch
+          fetch-depth: 1
+
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -46,7 +74,7 @@ jobs:
         id: cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: dados/completo.json
+          path: ${{ env.DIR_DADOS }}/completo.json
           key: completo-nunca
           restore-keys: |
             completo-
@@ -63,7 +91,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          if [ -n "$CHAVE" ] && [ -s dados/completo.json ]; then
+          if [ -n "$CHAVE" ] && [ -s "$DIR_DADOS/completo.json" ]; then
             echo "completo.json restaurado de $CHAVE"
             exit 0
           fi
@@ -80,18 +108,25 @@ jobs:
           rm -rf "$RUNNER_TEMP/bruto" && mkdir -p "$RUNNER_TEMP/bruto"
           gh release download "$tag" --repo "$REPO" --pattern "*.zip" --dir "$RUNNER_TEMP/bruto"
           zip=$(ls "$RUNNER_TEMP"/bruto/*.zip | sort | tail -n 1)
-          referencia=$(python -c "import json; print(json.load(open('dados/ultimo.json', encoding='utf-8'))['data_referencia'])")
-          python coletor.py --de-arquivo "$zip" --referencia "$referencia"
-          git checkout -- dados
-          test -s dados/completo.json
+          referencia=$(python -c "import json; print(json.load(open('$DIR_DADOS/ultimo.json', encoding='utf-8'))['data_referencia'])")
+          python coletor.py --dados "$DIR_DADOS" --de-arquivo "$zip" --referencia "$referencia"
+          # `-C "$DIR_DADOS" checkout -- .` e não `checkout -- dados`: o
+          # pathspec "." é relativo ao diretório, então devolve o que o
+          # coletor reescreveu nos dois casos - dentro de dados/ em main, ou
+          # a árvore inteira do checkout da branch de dados.
+          git -C "$DIR_DADOS" checkout -- .
+          test -s "$DIR_DADOS/completo.json"
 
       - name: Gerar o site
         id: site
         run: |
-          python gerar_site.py
+          python gerar_site.py --dados "$DIR_DADOS"
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          with open("dados/ultimo.json", encoding="utf-8") as f:
+          import os
+
+          ultimo = os.path.join(os.environ["DIR_DADOS"], "ultimo.json")
+          with open(ultimo, encoding="utf-8") as f:
               print("data=" + json.load(f)["data_referencia"])
           PY
 
@@ -103,17 +138,17 @@ jobs:
         env:
           DATA: ${{ steps.site.outputs.data }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add dados/lastmod.json
-          if git diff --staged --quiet; then
+          git -C "$DIR_DADOS" config user.name "github-actions[bot]"
+          git -C "$DIR_DADOS" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$DIR_DADOS" add lastmod.json
+          if git -C "$DIR_DADOS" diff --staged --quiet; then
             echo "lastmod inalterado."
             exit 0
           fi
-          git commit -m "lastmod $DATA (render)"
-          git push || {
-            git fetch origin main
-            git reset --hard origin/main
+          git -C "$DIR_DADOS" commit -m "lastmod $DATA (render)"
+          git -C "$DIR_DADOS" push origin "HEAD:$BRANCH_ALVO" || {
+            git -C "$DIR_DADOS" fetch origin "$BRANCH_ALVO"
+            git -C "$DIR_DADOS" reset --hard "origin/$BRANCH_ALVO"
             echo "push do lastmod rejeitado; a próxima run refaz."
           }
 

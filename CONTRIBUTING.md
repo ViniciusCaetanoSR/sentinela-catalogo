@@ -56,6 +56,27 @@ A única exceção é `dados/lastmod.json` quando a mudança **é** no gerador e
 
 Não versionados (e nunca devem ser): `site/`, `dados/completo.json`, `dados/bruto.zip`.
 
+### Mover `dados/` para a branch própria
+
+Está **pronto e desligado**. O bot commita em `main` todo dia, e isso custa duas coisas: `main` não pode exigir pull request (o `GITHUB_TOKEN` não passa por cima de um ruleset, e a coleta pararia no dia seguinte) e toda branch de feature conflita na linha que sempre difere. A saída é uma branch órfã `dados`, sem código e sem histórico em comum com `main`, cuja raiz é o que hoje vive em `dados/`.
+
+Os workflows já sabem viver dos dois jeitos, e quem decide é a variável de repositório `BRANCH_DADOS`. **Enquanto ela não existir, nada muda**: o passo *Onde ficam os dados* define `DIR_DADOS=dados` e `BRANCH_ALVO` = a branch do checkout, e cada passo seguinte faz exatamente o que sempre fez. Preenchida com `dados`, um segundo `actions/checkout` traz a branch para `dados-branch/`, e é lá que o coletor grava (`--dados`), o gerador lê (`--dados`) e o commit acontece (`git -C`).
+
+A ordem de ativação — e ela importa:
+
+1. mergear esta branch em `main`. Nada muda: a variável ainda não existe;
+2. `bash ferramentas/migrar-dados.sh`. Cria a branch `dados` **localmente**, a partir do `dados/` commitado. Não empurra nada, não escreve um byte no diretório de trabalho, recusa rodar com mudança pendente e, na segunda vez, não faz nada;
+3. `git push origin dados`;
+4. definir `BRANCH_DADOS` = `dados` em *Settings > Secrets and variables > Actions > Variables*. **É aqui que a mudança liga**;
+5. rodar *Coletar e publicar* pelo *Run workflow* e conferir que o commit do dia caiu na branch `dados`, e não em `main`;
+6. só então tirar `dados/` de `main`, por PR: `git rm -r --cached dados` e `/dados/` no `.gitignore`. Antes de o passo 5 dar certo, não — o dado do dia ainda está ali;
+7. criar o ruleset em `main`: PR obrigatório, check `ci`, sem force-push. A partir do passo 4 o bot não empurra mais em `main`, que é justamente o que faltava para isso ser possível;
+8. localmente, `git worktree add dados dados`. A branch passa a aparecer como uma pasta `dados/` ao lado do código, e `python gerar_site.py` volta a funcionar sem argumento nenhum.
+
+Para voltar atrás em qualquer ponto até o 5, apague a variável: no run seguinte tudo volta para `main`, e o `dados/` de lá continua onde estava.
+
+Depois do passo 8, `dados` é o nome de uma branch **e** de uma pasta, e o git não sabe qual você quer: escreva `git log dados --`.
+
 ## Preview local
 
 ```bash
@@ -65,4 +86,4 @@ python servir.py          # http://localhost:8000/<base_path>/
 
 `servir.py` tira o `base_path` do caminho e serve `404.html` para o que não existe, como o GitHub Pages faz. Abrir `site/index.html` direto no navegador não funciona: todo link interno carrega o prefixo.
 
-Para ter um `dados/completo.json` local sem bater na Receita, pegue o ZIP do release `bruto-<versao>` mais recente e rode `python coletor.py --de-arquivo <zip>` — ou rode `python coletor.py` uma vez (é um download de ~500 KB, o endpoint é público). Nos dois casos, depois: `git checkout -- dados` (o `completo.json` e o `bruto.zip`, que o git ignora, ficam). Para não tocar no `dados/` do repositório de jeito nenhum, use `--dados <outra pasta>` e `python gerar_site.py --raiz`/`--saida`.
+Para ter um `dados/completo.json` local sem bater na Receita, pegue o ZIP do release `bruto-<versao>` mais recente e rode `python coletor.py --de-arquivo <zip>` — ou rode `python coletor.py` uma vez (é um download de ~500 KB, o endpoint é público). Nos dois casos, depois: `git checkout -- dados` (o `completo.json` e o `bruto.zip`, que o git ignora, ficam). Para não tocar no `dados/` do repositório de jeito nenhum, use `--dados <outra pasta>` nos dois scripts (no gerador ele troca só a pasta de dados; templates, fontes e `config.json` continuam vindo da raiz) ou `python gerar_site.py --raiz`/`--saida`.

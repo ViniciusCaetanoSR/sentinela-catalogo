@@ -7,8 +7,22 @@ name: CI
 
 on:
   push:
-    # Os commits do bot ("coleta", "lastmod") só tocam dados/: rodar a
-    # suíte neles é gastar dois minutos de runner para provar nada.
+    # A branch órfã de dados não tem código: é só o estado que o bot grava,
+    # dois commits por dia, e a suíte não teria o que provar neles (pior:
+    # não há tests/ lá, então o job ficaria vermelho para sempre). O nome
+    # está fixo porque um filtro de `on:` não enxerga vars.BRANCH_DADOS -
+    # enquanto a branch não existir, esta linha não faz nada. Ver "Mover
+    # dados/ para a branch própria" no CONTRIBUTING.md.
+    #
+    # Efeito colateral aceito: filtrar ref de branch tira o push de TAG do
+    # gatilho (o GitHub não dispara para o tipo de ref que o filtro não
+    # nomeia). Não se perde prova - a tag aponta para um commit que já
+    # passou pelo CI quando entrou na branch.
+    branches-ignore:
+      - "dados"
+    # E enquanto dados/ ainda vive em main, os commits do bot ("coleta",
+    # "lastmod") só tocam essa pasta: rodar a suíte neles é gastar dois
+    # minutos de runner para provar nada.
     paths-ignore:
       - "dados/**"
   pull_request:

@@ -2914,6 +2914,13 @@ def analisar_argumentos(argv):
         "(padrão: a pasta deste script)",
     )
     parser.add_argument(
+        "--dados",
+        metavar="DIR",
+        help="lê os dados daqui em vez de <raiz>/dados, mantendo templates, "
+        "fontes e config.json da raiz (é o que permite ao workflow apontar "
+        "para o checkout da branch de dados)",
+    )
+    parser.add_argument(
         "--saida", metavar="DIR", help="onde gravar o site (padrão: <raiz>/site)"
     )
     parser.add_argument(
@@ -2928,6 +2935,10 @@ def main(argv=None):
     args = analisar_argumentos(sys.argv[1:] if argv is None else argv)
     caminhos = comum.Caminhos(
         raiz=os.path.abspath(args.raiz) if args.raiz else comum.RAIZ,
+        # --dados é independente de --raiz de propósito: quando dados/ vive
+        # numa branch órfã, o workflow faz dois checkouts e o gerador precisa
+        # dos templates de um e do dado do outro.
+        dados=os.path.abspath(args.dados) if args.dados else None,
         site=os.path.abspath(args.saida) if args.saida else None,
     )
     cfg = comum.carregar_config(caminhos.config)

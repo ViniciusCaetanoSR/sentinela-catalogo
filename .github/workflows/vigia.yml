@@ -9,7 +9,8 @@ name: Vigia
 # MESMO repositório, e o GitHub desativa todos juntos. Se a inatividade
 # desligar o cron da coleta, desliga o daqui também - e o silêncio fica
 # completo. Também não cobre o deploy: ele lê o dados/ultimo.json do
-# checkout, não o site publicado (o que está NO AR é conferido pelo passo
+# checkout (de main ou da branch de dados, conforme a variável
+# BRANCH_DADOS), não o site publicado (o que está NO AR é conferido pelo passo
 # "Conferir o que foi publicado" do coletar.yml, com o site/status.json).
 # O único alerta que sobrevive ao repositório inteiro parar é o monitor
 # externo, fora do GitHub - ver "Monitor externo" no README.
@@ -32,13 +33,39 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # O mesmo interruptor do coletar.yml e do render.yml: com a variável de
+      # repositório BRANCH_DADOS vazia, o snapshot é o do checkout de main,
+      # como sempre. O vigia precisa dele em qualquer um dos dois lugares -
+      # um homem morto que perde o arquivo de vista deixa de vigiar em
+      # silêncio, que é o pior desfecho possível para este workflow.
+      - name: Onde ficam os dados
+        env:
+          BRANCH_DADOS: ${{ vars.BRANCH_DADOS }}
+        run: |
+          if [ -n "$BRANCH_DADOS" ]; then
+            echo "DIR_DADOS=dados-branch" >> "$GITHUB_ENV"
+          else
+            echo "DIR_DADOS=dados" >> "$GITHUB_ENV"
+          fi
+
+      - name: Trazer a branch de dados
+        if: vars.BRANCH_DADOS != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.BRANCH_DADOS }}
+          path: dados-branch
+          fetch-depth: 1
+
       - name: O snapshot está velho?
         id: idade
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import os
           from datetime import date
-          with open("dados/ultimo.json", encoding="utf-8") as f:
+
+          ultimo = os.path.join(os.environ["DIR_DADOS"], "ultimo.json")
+          with open(ultimo, encoding="utf-8") as f:
               ref = date.fromisoformat(json.load(f)["data_referencia"])
           dias = (date.today() - ref).days
           print(f"dias={dias}")

@@ -67,6 +67,44 @@ jobs:
           # O retry de push é por regeneração, não por rebase: basta a ponta.
           fetch-depth: 1
 
+      # Onde vive o dado desta run, e para onde vai o commit dele. Duas
+      # variáveis num passo só, para os passos seguintes não precisarem saber
+      # de nada: quem mexe em dado usa "$DIR_DADOS", quem empurra usa
+      # "$BRANCH_ALVO", e o caminho é um só em vez de dois YAMLs paralelos.
+      #
+      # Com a variável de repositório BRANCH_DADOS VAZIA - o padrão, e o que
+      # vale hoje - nada muda: DIR_DADOS=dados é o mesmo diretório que o
+      # coletor usaria sozinho, `git -C dados` é o mesmo repositório do
+      # checkout, e BRANCH_ALVO é a branch que está no checkout, para onde um
+      # `git push` sem argumento iria de qualquer forma.
+      #
+      # Preenchida (valor esperado: "dados"), o passo seguinte traz a branch
+      # órfã para dados-branch/ e é lá que tudo passa a acontecer - inclusive
+      # o commit, porque aquele diretório é OUTRO repositório. Ver "Mover
+      # dados/ para a branch própria" no CONTRIBUTING.md.
+      - name: Onde ficam os dados
+        env:
+          BRANCH_DADOS: ${{ vars.BRANCH_DADOS }}
+          REF: ${{ github.ref_name }}
+        run: |
+          if [ -n "$BRANCH_DADOS" ]; then
+            echo "DIR_DADOS=dados-branch" >> "$GITHUB_ENV"
+            echo "BRANCH_ALVO=$BRANCH_DADOS" >> "$GITHUB_ENV"
+          else
+            echo "DIR_DADOS=dados" >> "$GITHUB_ENV"
+            echo "BRANCH_ALVO=$REF" >> "$GITHUB_ENV"
+          fi
+
+      # path: dados-branch, e não dados, para não colidir com a pasta que
+      # ainda vem no checkout de main enquanto a transição não terminar.
+      - name: Trazer a branch de dados
+        if: vars.BRANCH_DADOS != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ vars.BRANCH_DADOS }}
+          path: dados-branch
+          fetch-depth: 1
+
       # O cron de resgate só tem trabalho se o das 06:00 falhou. A data é a
       # de Brasília, a mesma que o coletor usa para nomear o snapshot.
       - name: Já coletado hoje?
@@ -76,7 +114,7 @@ jobs:
         run: |
           HOJE=$(TZ=America/Sao_Paulo date +%F)
           echo "hoje=$HOJE" >> "$GITHUB_OUTPUT"
-          if [ "$EVENTO" = "schedule" ] && [ -f "dados/historico/$HOJE.json" ]; then
+          if [ "$EVENTO" = "schedule" ] && [ -f "$DIR_DADOS/historico/$HOJE.json" ]; then
             echo "já coletado hoje ($HOJE): nada a fazer."
             echo "pular=true" >> "$GITHUB_OUTPUT"
           else
@@ -97,10 +135,13 @@ jobs:
         env:
           SENTINELA_ACEITAR_QUEDA: ${{ inputs.aceitar_queda == true && '1' || '' }}
         run: |
-          python coletor.py
+          python coletor.py --dados "$DIR_DADOS"
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
-          with open("dados/ultimo.json", encoding="utf-8") as f:
+          import os
+
+          ultimo = os.path.join(os.environ["DIR_DADOS"], "ultimo.json")
+          with open(ultimo, encoding="utf-8") as f:
               s = json.load(f)
           print("data=" + s["data_referencia"])
           print("versao=" + str(s["contagens"].get("versao", "")))
@@ -116,8 +157,8 @@ jobs:
         with:
           name: snapshot-${{ steps.coleta.outputs.data || steps.hoje.outputs.hoje }}
           path: |
-            dados/historico/*.json
-            dados/bruto.zip
+            ${{ env.DIR_DADOS }}/historico/*.json
+            ${{ env.DIR_DADOS }}/bruto.zip
           retention-days: 14
           if-no-files-found: ignore
 
@@ -129,37 +170,46 @@ jobs:
         env:
           DATA: ${{ steps.coleta.outputs.data }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # site/, dados/completo.json e dados/bruto.zip NÃO são versionados
-          # (ver .gitignore).
-          git add dados
-          if git diff --staged --quiet; then
+          git -C "$DIR_DADOS" config user.name "github-actions[bot]"
+          git -C "$DIR_DADOS" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # completo.json e bruto.zip NÃO são versionados: em main pelo
+          # .gitignore da raiz, na branch de dados pelo .gitignore que o
+          # ferramentas/migrar-dados.sh põe nela. site/ idem.
+          # `git -C "$DIR_DADOS" add .` serve aos dois casos - dentro da pasta
+          # de dados é exatamente o que `git add dados` sempre fez.
+          git -C "$DIR_DADOS" add .
+          if git -C "$DIR_DADOS" diff --staged --quiet; then
             echo "Nada mudou hoje."
             exit 0
           fi
           # A data vem do coletor, no fuso de Brasília. Usar `date -u` aqui
           # rotulava "coleta 2026-08-22" um commit que alterava o arquivo
           # 2026-08-21.json, toda vez que a run caía depois das 21h BRT.
-          git commit -m "coleta $DATA"
+          git -C "$DIR_DADOS" commit -m "coleta $DATA"
 
           # Retry por REGENERAÇÃO, não por rebase. O rebase conflitava
           # justamente na linha que sempre difere, e um `git pull` que falha
           # mata o passo inteiro (o shell roda com -e).
-          guardado="$RUNNER_TEMP/dados"
-          rm -rf "$guardado" && cp -r dados "$guardado"
+          #
+          # tar, e não `cp -r`: na branch de dados aquele diretório É um
+          # repositório, e levar o .git no bolso desfaria o fetch/reset que
+          # acabou de acontecer. Extrair por cima basta - o coletor nunca
+          # APAGA arquivo em dados/, só acrescenta e reescreve.
+          guardado="$RUNNER_TEMP/dados.tar"
+          rm -f "$guardado"
+          tar -C "$DIR_DADOS" --exclude=.git -cf "$guardado" .
           for tentativa in 1 2 3; do
-            if git push; then exit 0; fi
-            echo "push rejeitado; refazendo sobre origin/main ($tentativa/3)"
-            git fetch origin main
-            git reset --hard origin/main
-            rm -rf dados && cp -r "$guardado" dados
-            git add dados
-            if git diff --staged --quiet; then
+            if git -C "$DIR_DADOS" push origin "HEAD:$BRANCH_ALVO"; then exit 0; fi
+            echo "push rejeitado; refazendo sobre origin/$BRANCH_ALVO ($tentativa/3)"
+            git -C "$DIR_DADOS" fetch origin "$BRANCH_ALVO"
+            git -C "$DIR_DADOS" reset --hard "origin/$BRANCH_ALVO"
+            tar -C "$DIR_DADOS" -xf "$guardado"
+            git -C "$DIR_DADOS" add .
+            if git -C "$DIR_DADOS" diff --staged --quiet; then
               echo "outra run já gravou o mesmo conteúdo."
               exit 0
             fi
-            git commit -m "coleta $DATA"
+            git -C "$DIR_DADOS" commit -m "coleta $DATA"
           done
           echo "::error::não foi possível empurrar após 3 tentativas"
           exit 1
@@ -186,13 +236,13 @@ jobs:
           fi
           # Copiado com o nome final: o asset é baixado com esse nome, não
           # como "bruto.zip". --clobber cobre a repetição do mesmo dia.
-          cp dados/bruto.zip "$RUNNER_TEMP/ATRIBUTOS_POR_NCM_$DATA.zip"
+          cp "$DIR_DADOS/bruto.zip" "$RUNNER_TEMP/ATRIBUTOS_POR_NCM_$DATA.zip"
           gh release upload "$tag" "$RUNNER_TEMP/ATRIBUTOS_POR_NCM_$DATA.zip" \
             --repo "$REPO" --clobber
 
       - name: Gerar o site
         if: steps.hoje.outputs.pular != 'true'
-        run: python gerar_site.py
+        run: python gerar_site.py --dados "$DIR_DADOS"
 
       # completo.json não é versionado (4,8 MB de churn diário), mas o
       # render.yml precisa dele para republicar o site sem bater na Receita.
@@ -202,7 +252,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: dados/completo.json
+          path: ${{ env.DIR_DADOS }}/completo.json
           key: completo-${{ steps.coleta.outputs.data }}
 
       # Segundo commit, e de propósito. dados/lastmod.json é escrito pelo
@@ -216,15 +266,15 @@ jobs:
         env:
           DATA: ${{ steps.coleta.outputs.data }}
         run: |
-          git add dados/lastmod.json
-          if git diff --staged --quiet; then
+          git -C "$DIR_DADOS" add lastmod.json
+          if git -C "$DIR_DADOS" diff --staged --quiet; then
             echo "lastmod inalterado."
             exit 0
           fi
-          git commit -m "lastmod $DATA"
-          git push || {
-            git fetch origin main
-            git reset --hard origin/main
+          git -C "$DIR_DADOS" commit -m "lastmod $DATA"
+          git -C "$DIR_DADOS" push origin "HEAD:$BRANCH_ALVO" || {
+            git -C "$DIR_DADOS" fetch origin "$BRANCH_ALVO"
+            git -C "$DIR_DADOS" reset --hard "origin/$BRANCH_ALVO"
             echo "push do lastmod rejeitado; a próxima run refaz."
           }
 

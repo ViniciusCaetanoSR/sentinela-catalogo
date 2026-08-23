@@ -1394,5 +1394,60 @@ class TestRebuild(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(site, g.CHAVE_TEMPLATES)))
 
 
+class TestDadosSeparados(unittest.TestCase):
+    """--dados aponta o gerador para outra árvore de dados.
+
+    É o que a branch órfã 'dados' precisa: o workflow faz dois checkouts (o
+    código em main, o dado na branch) e o gerador tem de ler templates,
+    fontes e config.json de um lugar e dados/ do outro. O teste prova a
+    separação pelos dois lados - o dado vem de fora, o template vem da raiz.
+    """
+
+    def _monta_separado(self):
+        raiz = tempfile.TemporaryDirectory()
+        self.addCleanup(raiz.cleanup)
+        fora = tempfile.TemporaryDirectory()
+        self.addCleanup(fora.cleanup)
+        with apoio.ambiente(raiz.name, {"base_path": "/repo"}) as caminhos:
+            # A raiz fica com um dados/ VAZIO (o ambiente cria o histórico):
+            # se o gerador lesse dali, montar_build não acharia ultimo.json e
+            # main() devolveria 1. O sucesso é a prova de que leu de --dados.
+            de_fora = comum.Caminhos(
+                raiz=caminhos.raiz, dados=os.path.join(fora.name, "dados")
+            )
+            os.makedirs(de_fora.historico)
+            apoio.montar_dados(de_fora, apoio.amostra(), HOJE)
+            # Uma marca só no template da raiz: se o gerador tivesse levado
+            # também os templates para junto do dado, ela não apareceria.
+            base = os.path.join(caminhos.templates, "base.html")
+            with open(base, "a", encoding="utf-8") as f:
+                print("<!-- marca-da-raiz -->", file=f)
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                codigo = g.main(["--raiz", raiz.name, "--dados", de_fora.dados])
+        return codigo, raiz.name, de_fora
+
+    def test_le_os_dados_de_fora_e_os_templates_da_raiz(self):
+        codigo, raiz, de_fora = self._monta_separado()
+        self.assertEqual(codigo, 0)
+        home = _le(raiz, "site", "index.html")
+        self.assertIn("<!-- marca-da-raiz -->", home)
+        # O dado que so existe fora chegou ao site.
+        self.assertIn(g.br(HOJE.isoformat()), home)
+
+    def test_lastmod_e_gravado_junto_do_dado_e_nao_na_raiz(self):
+        """O lastmod acompanha o dado - é ele que o workflow commita na branch.
+
+        Se saísse em <raiz>/dados/, o passo de commit da branch nunca o veria
+        e o gerador acharia que tudo mudou todo dia: lastmod de hoje em 11
+        mil URLs, que é exatamente o que o arquivo existe para evitar.
+        """
+        _, raiz, de_fora = self._monta_separado()
+        self.assertTrue(os.path.exists(de_fora.lastmod))
+        self.assertFalse(os.path.exists(os.path.join(raiz, "dados", "lastmod.json")))
+
+
 if __name__ == "__main__":
     unittest.main()

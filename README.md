@@ -79,6 +79,7 @@ Os dois scripts principais aceitam argumentos para não tocar no `dados/` e no `
 | | `--referencia AAAA-MM-DD` | fixa o "hoje" da regra; padrão é hoje em Brasília |
 | | `--aceitar-queda` | a válvula do portão, igual a `SENTINELA_ACEITAR_QUEDA=1` |
 | `gerar_site.py` | `--raiz DIR` | outro repositório (`dados/`, `templates/`, `fontes/`, `config.json` de lá) |
+| | `--dados DIR` | lê os dados daqui e o resto da raiz — é como o workflow aponta para o checkout da branch `dados` sem mover templates nem `config.json` |
 | | `--saida DIR` | grava o site em `DIR` em vez de `site/` |
 | | `--base-path /x` | sobrescreve o `base_path` do `config.json` (vazio para servir na raiz) |
 
@@ -105,7 +106,7 @@ Dois scripts de verdade, dois auxiliares e um módulo comum; entre os scripts, n
 - **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. O estado de uma geração vive num `Build` passado explicitamente a cada função. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato. O arquivo guarda também, sob `__templates__`, o hash de `templates/` e de `fontes/fontes.css`: quando ele muda (ou quando o `lastmod.json` não existe) o build é um *rebuild* — o HTML de toda página mudou sem que o dado tenha mudado — e `mudancas.txt` leva só a raiz. Fora disso leva todas as URLs que mudaram, sem teto.
 - **`site/status.json`** é a prova de vida do build, e o único arquivo do site deliberadamente volátil: traz `data_referencia`, `versao`, `gerado_em`, `paginas`, `viradas`, `proximo_corte` e `schema`. Fica **fora do sitemap e do `lastmod.json`** — `gerado_em` muda a cada build e carimbaria data nova todo dia numa URL que ninguém precisa indexar. É o que o passo *Conferir o que foi publicado* baixa da URL pública depois do deploy, para exigir que o site no ar seja o build desta run (a data certa e ao menos 5 000 páginas) em vez de um artifact velho ou um `base_path` errado.
 - **`indexnow.py`** e **`servir.py`** são invólucros finos. O primeiro avisa os buscadores das URLs em `mudancas.txt`; o segundo é preview.
-- **`dados/`** é o estado. Versionado em `main` por enquanto, escrito só pelo bot (ver [CONTRIBUTING.md](CONTRIBUTING.md) sobre por que nunca entra em branch de feature). `completo.json` e `bruto.zip` ficam de fora por tamanho e churn.
+- **`dados/`** é o estado. Versionado em `main` por enquanto, escrito só pelo bot (ver [CONTRIBUTING.md](CONTRIBUTING.md) sobre por que nunca entra em branch de feature, e sobre a branch própria que já está pronta e desligada). `completo.json` e `bruto.zip` ficam de fora por tamanho e churn.
 
 ## O que o site publica
 
@@ -173,6 +174,12 @@ Se a coleta das 06:00 falhou e a de resgate das 10:00 passou, a issue `coleta-fa
 Trocar um CSS, um template ou o `config.json` não pede dado novo — pede um site novo. O workflow **Renderizar** dispara sozinho em push em `main` que toque `templates/`, `fontes/`, `gerar_site.py` ou `config.json` (e manualmente, pelo *Run workflow*), restaura o `completo.json` da última coleta do cache do Actions, roda o gerador e publica. A Receita não é consultada.
 
 Se o cache não existir (repositório novo, ou cache expirado por inatividade de uma semana), o job baixa o ZIP da última release `bruto-*` e reapura com `python coletor.py --de-arquivo`, sem tocar a Receita; o `completo.json` sai disso e o resto de `dados/` é restaurado do git. Só quando também não há release o job falha, com a mensagem "rode o workflow Coletar". Uma coleta regrava o cache e, quando o conteúdo muda, a release.
+
+## A branch `dados`
+
+Cada coleta deixa dois commits em `main` — o snapshot e o `lastmod` —, e o preço disso é alto: `main` não pode exigir pull request, porque o `GITHUB_TOKEN` não passa por cima de um ruleset e a coleta pararia na manhã seguinte; e toda branch de feature conflita na linha que sempre difere.
+
+A saída está **pronta e desligada**: uma branch órfã `dados`, sem código e sem histórico em comum com `main`, com o conteúdo de `dados/` na raiz. Os três workflows que tocam o dado — *Coletar*, *Renderizar* e *Vigia* — leem a variável de repositório `BRANCH_DADOS` e, **enquanto ela não existir, nada muda** — o dado continua em `main`, exatamente como hoje. Preenchida com `dados`, um segundo `actions/checkout` traz a branch para `dados-branch/`, e é de lá que o coletor grava (`--dados`), o gerador lê (`--dados`) e o commit sai (`git -C`). `ferramentas/migrar-dados.sh` cria a branch localmente, a partir do `dados/` que está em `main`, sem empurrar nada e sem tocar no diretório de trabalho. A ordem de ativação, passo a passo, está em [CONTRIBUTING.md](CONTRIBUTING.md#mover-dados-para-a-branch-própria).
 
 ## Armadilhas do endpoint
 
