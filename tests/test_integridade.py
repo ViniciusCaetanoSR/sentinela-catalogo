@@ -6,6 +6,7 @@ cortar um atributo sem parar de linkar para ele quebraria o site em silencio.
 """
 
 import contextlib
+import csv
 import io
 import json
 import os
@@ -67,7 +68,7 @@ def _lastmod(destino):
 
 def _tbody(html):
     """So as linhas da tabela: a legenda da pagina tambem usa as etiquetas."""
-    return html.split("<tbody>")[1].split("</tbody>")[0]
+    return html.split("<tbody")[1].split("</tbody>")[0]
 
 
 def _arquivos(raiz):
@@ -266,8 +267,10 @@ class TestSiteFecha(unittest.TestCase):
         for caminho in paginas:
             html = _le(caminho)
             self.assertNotIn('data-rot="Situação"></td>', html)
-            com_marca += html.count('<td data-rot="Situação"><span class="tag muda">')
-            sem_marca += html.count("<td></td>")
+            com_marca += html.count(
+                '<td role="cell" data-rot="Situação"><span class="tag muda">'
+            )
+            sem_marca += html.count('<td role="cell"></td>')
         self.assertTrue(com_marca, "nenhum atributo com virada na pagina de orgao")
         self.assertTrue(sem_marca, "nenhuma celula vazia sem rotulo")
 
@@ -328,7 +331,8 @@ class TestSiteFecha(unittest.TestCase):
         atributo = _le(site, "atributos", "ATT_FUTURO", "index.html")
         self.assertIn(
             '<div class="aviso"><strong data-corte="2099-12-31">Faltam 26794 dias.'
-            "</strong> Este atributo vira obrigatório em 31/12/2099 para 1 NCM:",
+            '</strong> Este atributo vira obrigatório em <time datetime="2099-12-31">'
+            "31/12/2099</time> para 1 NCM:",
             atributo,
         )
 
@@ -492,14 +496,20 @@ class TestSiteFecha(unittest.TestCase):
         antes = _lastmod(tmp.name)
         tabela = _tbody(_le(tmp.name, "site", "ncm", "8418.69.20", "index.html"))
         self.assertIn(
-            '<span class="tag muda">vira obrigatório em 22/08/2026</span>', tabela
+            '<span class="tag muda">vira obrigatório em '
+            '<time datetime="2026-08-22">22/08/2026</time></span>',
+            tabela,
         )
         self.assertNotIn("prazo vencido", tabela)
 
         _monta(tmp.name, "/repo", referencia=date(2026, 8, 23))
         depois = _lastmod(tmp.name)
         tabela = _tbody(_le(tmp.name, "site", "ncm", "8418.69.20", "index.html"))
-        self.assertIn('<span class="tag venc">prazo vencido em 22/08/2026</span>', tabela)
+        self.assertIn(
+            '<span class="tag venc">prazo vencido em '
+            '<time datetime="2026-08-22">22/08/2026</time></span>',
+            tabela,
+        )
         self.assertNotIn("vira obrigatório em", tabela)
         self.assertNotIn('<span class="tag opc">', tabela)
         # A situacao mudou de verdade: o lastmod acompanha.
@@ -508,7 +518,7 @@ class TestSiteFecha(unittest.TestCase):
         # data (ATT_OBRIGATORIO_FUTURO) nunca e "vencido".
         self.assertEqual(antes["/ncm/8436.21.00/"], depois["/ncm/8436.21.00/"])
         self.assertIn(
-            "prazo vencido em 01/01/2020",
+            'prazo vencido em <time datetime="2020-01-01">01/01/2020</time>',
             _tbody(_le(tmp.name, "site", "ncm", "8436.21.00", "index.html")),
         )
         self.assertNotIn(
@@ -516,6 +526,257 @@ class TestSiteFecha(unittest.TestCase):
             _tbody(_le(tmp.name, "site", "ncm", "8504.21.00", "index.html")),
         )
         self._confere_fechado(os.path.join(tmp.name, "site"), "/repo")
+
+
+RE_JSONLD = re.compile(r'<script type="application/ld\+json">(.*?)</script>', re.S)
+
+
+def _jsonld(html):
+    """O JSON-LD da página, parseado. Exatamente um por página."""
+    blocos = RE_JSONLD.findall(html)
+    assert len(blocos) == 1, f"{len(blocos)} blocos de JSON-LD"
+    return json.loads(blocos[0])
+
+
+def _paginas_html(site):
+    return [
+        os.path.join(b, n) for b, _, ns in os.walk(site) for n in ns if n.endswith(".html")
+    ]
+
+
+class TestPublicacao(unittest.TestCase):
+    """O site gerado uma vez, lido por varios testes: folha unica, roles
+    das tabelas, dados abertos, JSON-LD e <time>."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.raiz = cls.tmp.name
+        _, cls.site, _ = _monta(cls.raiz, "/repo")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_uma_folha_so_e_fontes_dentro(self):
+        # Os @font-face vivem dentro de estilo.<hash>.css, com o base_path
+        # já nos url(): uma folha bloqueante por página, não duas. Os woff2
+        # continuam em site/fontes/ e os preload do <head> continuam.
+        site = self.site
+        folhas = [n for n in os.listdir(site) if n.endswith(".css")]
+        self.assertEqual(len(folhas), 1, folhas)
+        css = _le(site, folhas[0])
+        self.assertTrue(css.startswith("@font-face"), css[:60])
+        self.assertIn("url(/repo/fontes/figtree-latin.woff2)", css)
+        self.assertIn("url(/repo/fontes/jetbrainsmono-latin.woff2)", css)
+        self.assertNotIn("url(/fontes/", css)
+        self.assertIn(":root{", css)
+        self.assertNotIn("/*", css)
+        self.assertFalse(os.path.exists(os.path.join(site, "fontes", "fontes.css")))
+        self.assertTrue(os.path.exists(os.path.join(site, "fontes", "figtree-latin.woff2")))
+        self.assertTrue(os.path.exists(os.path.join(site, "fontes", "OFL-Figtree.txt")))
+        home = _le(site, "index.html")
+        self.assertEqual(home.count('rel="stylesheet"'), 1)
+        self.assertIn(f'<link rel="stylesheet" href="/repo/{folhas[0]}">', home)
+        self.assertNotIn("fontes.css", home)
+        self.assertIn(
+            '<link rel="preload" href="/repo/fontes/figtree-latin.woff2" as="font"', home
+        )
+        # Sem base_path os url() ficam na raiz.
+        tmp2 = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp2.cleanup)
+        _, site2, _ = _monta(tmp2.name, "")
+        folha = [n for n in os.listdir(site2) if n.endswith(".css")][0]
+        self.assertIn("url(/fontes/figtree-latin.woff2)", _le(site2, folha))
+
+    def test_tabela_tem_roles(self):
+        # Abaixo de 640px o CSS poe display:block nas linhas e celulas, e o
+        # navegador apaga a semantica de tabela da arvore de acessibilidade.
+        # Os roles explicitos a devolvem - em TODA tabela do site.
+        site = self.site
+        tabelas = 0
+        for caminho in _paginas_html(site):
+            html = _le(caminho)
+            for tag, role in (
+                ("table", "table"),
+                ("thead", "rowgroup"),
+                ("tbody", "rowgroup"),
+                ("tr", "row"),
+                ("th", "columnheader"),
+                ("td", "cell"),
+            ):
+                abertas = re.findall(rf"<{tag}\b[^>]*>", html)
+                sem_role = [a for a in abertas if f'role="{role}"' not in a]
+                self.assertEqual(sem_role, [], (caminho, tag))
+            tabelas += html.count("<table")
+        self.assertGreater(tabelas, 3)
+        home = _le(site, "index.html")
+        self.assertIn('<table role="table"><caption>', home)
+        self.assertIn('<th scope="col" role="columnheader">NCM</th>', home)
+        self.assertIn('<td role="cell" class="ncm" data-rot="NCM">', home)
+
+    def test_dataset_lista_json_e_csv(self):
+        home = _le(self.site, "index.html")
+        dataset = _jsonld(home)
+        self.assertEqual(dataset["@type"], "Dataset")
+        distribuicao = {
+            d["encodingFormat"]: d["contentUrl"] for d in dataset["distribution"]
+        }
+        self.assertEqual(
+            distribuicao,
+            {
+                "application/rss+xml": "https://exemplo.test/repo/feed.xml",
+                "application/json": "https://exemplo.test/repo/dados/viradas.json",
+                "text/csv": "https://exemplo.test/repo/dados/viradas.csv",
+            },
+        )
+        self.assertEqual(
+            dataset["publisher"],
+            {
+                "@type": "Organization",
+                "name": "Sentinela do Catálogo",
+                "url": "https://exemplo.test/repo/",
+            },
+        )
+        self.assertEqual(dataset["sourceOrganization"]["@type"], "GovernmentOrganization")
+        self.assertIn("Receita Federal", dataset["sourceOrganization"]["name"])
+        self.assertTrue(dataset["isBasedOn"].startswith("https://portalunico"))
+        # Os dois arquivos existem e a home os linka, discretamente.
+        self.assertTrue(os.path.exists(os.path.join(self.site, "dados", "viradas.json")))
+        self.assertTrue(os.path.exists(os.path.join(self.site, "dados", "viradas.csv")))
+        self.assertIn(
+            '<p class="dados-abertos">Dados abertos: '
+            '<a href="/repo/dados/viradas.json">JSON</a> · '
+            '<a href="/repo/dados/viradas.csv">CSV</a></p>',
+            home,
+        )
+        # Sao dados, nao paginas: fora do sitemap e do lastmod.
+        for nome in os.listdir(self.site):
+            if nome.startswith("sitemap") and nome.endswith(".xml"):
+                self.assertNotIn("/dados/", _le(self.site, nome))
+        self.assertFalse(any(c.startswith("/dados/") for c in _lastmod(self.raiz)))
+
+    def test_csv_tem_cabecalho_e_linhas(self):
+        snapshot = json.loads(_le(self.raiz, "dados", "ultimo.json"))
+        texto = _le(self.site, "dados", "viradas.csv")
+        linhas = list(csv.reader(io.StringIO(texto)))
+        self.assertEqual(linhas[0], list(g.COLUNAS_CSV))
+        self.assertEqual(len(linhas) - 1, len(snapshot["viradas"]))
+        self.assertIn(
+            [
+                "8415.10.90",
+                "ATT_FUTURO",
+                "Referência de licenciamento",
+                "INMETRO",
+                "2099-12-31",
+                "2020-01-01",
+                "IMPORTACAO",
+            ],
+            linhas,
+        )
+        # O JSON e o snapshot normalizado, sem os campos volateis: a hora
+        # da coleta muda a cada run e quebraria o determinismo do site.
+        publico = json.loads(_le(self.site, "dados", "viradas.json"))
+        self.assertEqual(publico["data_referencia"], "2026-08-22")
+        self.assertEqual(len(publico["viradas"]), len(snapshot["viradas"]))
+        # Normalizado: a virada sai completa (nome, orgaos), o que o
+        # ultimo.json de schema 2 nao carrega - la isso mora no mapa.
+        primeira = publico["viradas"][0]
+        self.assertNotIn("nome", snapshot["viradas"][0])
+        self.assertEqual(
+            primeira["nome"], snapshot["atributos"][primeira["atributo"]]["nome"]
+        )
+        self.assertIn("atributos", publico)
+        self.assertEqual(publico["contagens"], snapshot["contagens"])
+        for chave in comum.VOLATEIS:
+            self.assertNotIn(chave, publico)
+            self.assertNotIn(chave, publico["http"])
+        self.assertEqual(publico["http"]["sha256_json"], snapshot["http"]["sha256_json"])
+
+    def test_time_datetime_nas_datas(self):
+        site = self.site
+        home = _le(site, "index.html")
+        # Chapéu, cartão, célula da tabela e rodapé.
+        self.assertIn(
+            '<span class="chapeu">Atualizado em '
+            '<time datetime="2026-08-22">22/08/2026</time></span>',
+            home,
+        )
+        self.assertIn(
+            '<div><span>corte</span><time datetime="2026-08-22">22/08/2026</time></div>',
+            home,
+        )
+        self.assertIn(
+            '<div><span>próximo</span><time datetime="2099-12-31">31/12/2099</time></div>',
+            home,
+        )
+        self.assertIn(
+            '<td role="cell" class="data" data-rot="Vira obrigatório em">'
+            '<time datetime="2099-12-31">31/12/2099</time><br>',
+            home,
+        )
+        for caminho in _paginas_html(site):
+            self.assertIn(
+                'Coleta automática em <time datetime="2026-08-22">22/08/2026</time>',
+                _le(caminho),
+                caminho,
+            )
+        ncm = _le(site, "ncm", "8415.10.90", "index.html")
+        self.assertIn(
+            '<span class="tag muda">vira obrigatório em '
+            '<time datetime="2099-12-31">31/12/2099</time></span>',
+            ncm,
+        )
+
+
+class TestDateModified(unittest.TestCase):
+    def _datas_jsonld(self, site):
+        """{caminho: dateModified} das paginas de NCM e de atributo."""
+        datas = {}
+        for caminho in _paginas_html(site):
+            rel = "/" + os.path.relpath(caminho, site).replace(os.sep, "/")
+            if not (rel.startswith("/ncm/") or rel.startswith("/atributos/")):
+                continue
+            if "capitulo" in rel or rel in ("/ncm/index.html", "/atributos/index.html"):
+                continue
+            dados = _jsonld(_le(caminho))
+            nos = {no["@type"]: no for no in dados["@graph"]}
+            self.assertIn("BreadcrumbList", nos, rel)
+            pagina = nos["WebPage"]
+            url = rel[: -len("index.html")]
+            self.assertEqual(pagina["url"], "https://exemplo.test/repo" + url, rel)
+            self.assertEqual(pagina["isPartOf"]["url"], "https://exemplo.test/repo/")
+            datas[url] = pagina["dateModified"]
+        return datas
+
+    def test_datemodified_bate_com_lastmod(self):
+        # Dia 22 e dia 23 com a mesma fixture: a pagina que nao mudou (a NCM
+        # 8436.21.00, vencida nos dois dias) mantem o dateModified do dia 1,
+        # a que mudou (8418.69.20: a virada de 22/08 virou prazo vencido)
+        # ganha o do dia 2 - e em TODA pagina o JSON-LD, escrito antes, diz
+        # o mesmo que o lastmod.json, calculado no fim.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        _, site, _ = _monta(tmp.name, "/repo", referencia=date(2026, 8, 22))
+        dia1 = self._datas_jsonld(site)
+        self.assertGreater(len(dia1), 10)
+        self.assertTrue(all(d == "2026-08-22" for d in dia1.values()))
+        primeiro = _lastmod(tmp.name)
+        for caminho, data in dia1.items():
+            self.assertEqual(primeiro[caminho][1], data, caminho)
+
+        _, site, _ = _monta(tmp.name, "/repo", referencia=date(2026, 8, 23))
+        dia2 = self._datas_jsonld(site)
+        lastmod = _lastmod(tmp.name)
+        for caminho, data in dia2.items():
+            self.assertEqual(lastmod[caminho][1], data, caminho)
+        self.assertEqual(dia2["/ncm/8436.21.00/"], "2026-08-22")
+        self.assertEqual(dia2["/atributos/ATT_FUTURO/"], "2026-08-22")
+        self.assertEqual(dia2["/ncm/8418.69.20/"], "2026-08-23")
+        # O dateModified nao entra na assinatura: senao a pagina mudaria
+        # de hash por causa da propria data, e nunca mais ficaria estavel.
+        self.assertEqual(primeiro["/ncm/8436.21.00/"], lastmod["/ncm/8436.21.00/"])
+        self.assertNotEqual(primeiro["/ncm/8418.69.20/"][0], lastmod["/ncm/8418.69.20/"][0])
 
 
 class TestModoLote(unittest.TestCase):
@@ -543,8 +804,8 @@ class TestModoLote(unittest.TestCase):
         site = self._roda(tmp.name)
         home = _le(site, "index.html")
         # Uma linha de lote e uma solta; a contagem segue por vinculo.
-        self.assertEqual(home.count('<tr class="lote">'), 1)
-        self.assertEqual(home.count('<td class="ncm"'), 1)
+        self.assertEqual(home.count('<tr role="row" class="lote">'), 1)
+        self.assertEqual(home.count('<td role="cell" class="ncm"'), 1)
         self.assertIn(f"<strong>{self.N} NCMs</strong>", home)
         self.assertIn(
             '<a href="/repo/atributos/ATT_LOTE/">veja as NCMs na página do atributo</a>',
@@ -581,8 +842,8 @@ class TestModoLote(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         site = self._roda(tmp.name, n=g.LIMIAR_LOTE)
         home = _le(site, "index.html")
-        self.assertNotIn('<tr class="lote">', home)
-        self.assertEqual(home.count('<td class="ncm"'), g.LIMIAR_LOTE + 1)
+        self.assertNotIn('class="lote"', home)
+        self.assertEqual(home.count('<td role="cell" class="ncm"'), g.LIMIAR_LOTE + 1)
         self.assertEqual(_le(site, "feed.xml").count("<item>"), g.LIMIAR_LOTE + 1)
 
     def test_o_que_mudou_tem_um_item_por_lote(self):

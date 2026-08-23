@@ -146,6 +146,27 @@ class TestJsonLd(unittest.TestCase):
         corpo = saida.split(">", 1)[1].rsplit("<", 1)[0]
         self.assertEqual(json.loads(corpo)["a"], "x<y>z&w")
 
+    def test_grafo_tira_o_context_de_cada_no(self):
+        trilha = g.trilha_dados(CFG, [("Início", "/")])
+        pagina = g.pagina_dados(CFG, "/ncm/1/", "2026-08-01")
+        grafo = g.grafo(trilha, pagina)
+        self.assertEqual(grafo["@context"], "https://schema.org")
+        self.assertEqual(
+            [no["@type"] for no in grafo["@graph"]], ["BreadcrumbList", "WebPage"]
+        )
+        self.assertTrue(all("@context" not in no for no in grafo["@graph"]))
+        self.assertEqual(
+            pagina,
+            {
+                "@type": "WebPage",
+                "url": "https://exemplo.test/repo/ncm/1/",
+                "dateModified": "2026-08-01",
+                "isPartOf": {"@type": "Dataset", "url": "https://exemplo.test/repo/"},
+            },
+        )
+        # Puro: a trilha recebida continua com o seu @context.
+        self.assertIn("@context", trilha)
+
 
 class TestTrilha(unittest.TestCase):
     ITENS = [("Início", "/"), ("NCMs", "/ncm/"), ("NCM 1", "/ncm/1/")]
@@ -724,13 +745,13 @@ class TestLotes(unittest.TestCase):
         self.assertEqual(lotes, [])
         with mock.patch.object(g, "TETO_LINHAS_HOME", 4):
             html = g.tabela_viradas(build, [], soltas, date(2026, 8, 22))
-        self.assertEqual(html.count('<td class="ncm"'), 4)
+        self.assertEqual(html.count('<td role="cell" class="ncm"'), 4)
         self.assertIn("mostra as 4 primeiras de 6 viradas", html)
         self.assertIn('href="/repo/atributos/"', html)
         lotes, soltas = g.agrupar_viradas(_viradas(3) + _viradas(1, atributo="ATT_2"), 2)
         html = g.tabela_viradas(build, lotes, soltas, date(2026, 8, 22))
-        self.assertEqual(html.count('<tr class="lote">'), 1)
-        self.assertEqual(html.count('<td class="ncm"'), 1)
+        self.assertEqual(html.count('<tr role="row" class="lote">'), 1)
+        self.assertEqual(html.count('<td role="cell" class="ncm"'), 1)
         self.assertIn("<strong>3 NCMs</strong>", html)
         self.assertIn(
             '<a href="/repo/atributos/ATT_1/">veja as NCMs na página do atributo</a>', html
@@ -840,6 +861,33 @@ class TestLastmod(unittest.TestCase):
         )
         self.assertEqual(atual["/"], ["aaa", "2026-08-01"])
         self.assertEqual(mudadas, [])
+
+    def test_data_modificacao_concorda_com_calcular_lastmod(self):
+        # O JSON-LD da pagina e escrito ANTES de calcular_lastmod rodar; os
+        # dois aplicam a mesma regra (registro_vigente), e tem de dar a
+        # mesma data em todos os casos: hash igual, hash diferente, pagina
+        # nova, registro malformado.
+        anterior = {
+            g.CHAVE_TEMPLATES: self.MARCA,
+            "/ncm/1/": ["aaa", "2026-08-01"],
+            "/ncm/2/": ["bbb", "2026-08-02"],
+            "/quebrado/": "lixo",
+            "/curto/": ["ccc"],
+        }
+        paginas = {"/ncm/1/": "aaa", "/ncm/2/": "novo", "/nova/": "ddd", "/quebrado/": "e"}
+        paginas["/curto/"] = "ccc"
+        build = _build(comum.RAIZ)
+        build.lastmod_anterior = anterior
+        atual, _, _ = g.calcular_lastmod(anterior, paginas, "2026-08-22", self.MARCA)
+        for caminho, marca in paginas.items():
+            self.assertEqual(
+                g.data_modificacao(build, caminho, marca), atual[caminho][1], caminho
+            )
+        self.assertEqual(g.data_modificacao(build, "/ncm/1/", "aaa"), "2026-08-01")
+        self.assertEqual(g.data_modificacao(build, "/ncm/2/", "novo"), "2026-08-22")
+        # Sem lastmod anterior (primeiro build), tudo e de hoje.
+        build.lastmod_anterior = {}
+        self.assertEqual(g.data_modificacao(build, "/ncm/1/", "aaa"), "2026-08-22")
 
     def test_chave_templates_nao_entra_nas_mudadas(self):
         paginas = {"/": "aaa", "__templates__": "zzz", "__outra__": "y"}
@@ -1082,27 +1130,152 @@ class TestPrazo(unittest.TestCase):
 
     def test_celula_da_tabela_carrega_data_corte_e_prazo_vencido(self):
         build = _build(comum.RAIZ)
-        html = g._celulas_virada(
-            build, "ATT_1", "Nome", ["X"], "2026-08-30", date(2026, 8, 22)
-        )
+
+        def celulas(referencia):
+            return "".join(
+                g._celulas_virada(build, "ATT_1", "Nome", ["X"], "2026-08-30", referencia)
+            )
+
+        html = celulas(date(2026, 8, 22))
         self.assertIn(
-            '<span class="prazo-txt" data-corte="2026-08-30">em 8 dias</span>'
+            '<time datetime="2026-08-30">30/08/2026</time>'
+            '<br><span class="prazo-txt" data-corte="2026-08-30">em 8 dias</span>'
             '<span class="prazo"><i style="--w:27%"></i></span>',
             html,
         )
-        html = g._celulas_virada(
-            build, "ATT_1", "Nome", ["X"], "2026-08-30", date(2026, 8, 28)
-        )
+        html = celulas(date(2026, 8, 28))
         self.assertIn(
             '<span class="prazo-txt urgente" data-corte="2026-08-30">em 2 dias', html
         )
         # O build nunca produz prazo vencido (a regra é fim >= hoje), mas a
         # função é a mesma que o JS espelha e tem de saber escrevê-lo.
-        html = g._celulas_virada(
-            build, "ATT_1", "Nome", ["X"], "2026-08-30", date(2026, 9, 2)
-        )
+        html = celulas(date(2026, 9, 2))
         self.assertIn("prazo vencido há 3 dias</span>", html)
         self.assertIn('<span class="prazo urgente"><i style="--w:6%">', html)
+
+
+class TestTabela(unittest.TestCase):
+    def test_celula_com_e_sem_rotulo(self):
+        self.assertEqual(
+            g.celula("x", "Órgão", "num"),
+            '<td role="cell" class="num" data-rot="Órgão">x</td>',
+        )
+        # Sem rótulo o data-rot não sai: no cartão mobile um rótulo seguido
+        # de nada é uma pergunta sem resposta.
+        self.assertEqual(g.celula(""), '<td role="cell"></td>')
+        self.assertEqual(g.celula("x", 'a"b'), '<td role="cell" data-rot="a&quot;b">x</td>')
+
+    def test_cabecalho_visivel_e_oculto(self):
+        self.assertEqual(g.cabecalho("NCM"), '<th scope="col" role="columnheader">NCM</th>')
+        self.assertEqual(
+            g.cabecalho("NCMs", "num"),
+            '<th scope="col" role="columnheader" class="num">NCMs</th>',
+        )
+        self.assertEqual(
+            g.cabecalho("Situação", oculto=True),
+            '<th scope="col" role="columnheader"><span class="oculto">Situação</span></th>',
+        )
+
+    def test_tabela_inteira_com_roles(self):
+        html = g.tabela(
+            'Viradas "x"',
+            "Legenda <y>",
+            [g.cabecalho("A")],
+            [g.linha([g.celula("1", "A")], "lote"), g.linha([g.celula("2", "A")])],
+        )
+        self.assertEqual(
+            html,
+            '<div class="rolagem" tabindex="0" role="region" '
+            'aria-label="Viradas &quot;x&quot;">'
+            '<table role="table"><caption>Legenda &lt;y&gt;</caption>'
+            '<thead role="rowgroup"><tr role="row">'
+            '<th scope="col" role="columnheader">A</th></tr></thead>'
+            '<tbody role="rowgroup">'
+            '<tr role="row" class="lote"><td role="cell" data-rot="A">1</td></tr>'
+            '<tr role="row"><td role="cell" data-rot="A">2</td></tr>'
+            "</tbody></table></div>",
+        )
+
+    def test_data_html(self):
+        self.assertEqual(
+            g.data_html("2026-08-30"), '<time datetime="2026-08-30">30/08/2026</time>'
+        )
+        self.assertEqual(g.data_html(""), "")
+        self.assertEqual(g.data_html(None), "")
+
+
+class TestDadosAbertos(unittest.TestCase):
+    def test_csv_escapa_virgula_e_aspas(self):
+        viradas = [
+            {
+                "ncm": "1",
+                "atributo": "A",
+                "nome": 'Nome, com "aspas"',
+                "orgaos": ["X", "Y"],
+                "vira_obrigatorio_em": "2099-01-01",
+                "vigente_desde": None,
+                "modalidade": "IMPORTACAO",
+            }
+        ]
+        texto = g.csv_viradas(viradas)
+        self.assertEqual(
+            texto,
+            "ncm,atributo,nome,orgaos,vira_obrigatorio_em,vigente_desde,modalidade\n"
+            '1,A,"Nome, com ""aspas""",X/Y,2099-01-01,,IMPORTACAO\n',
+        )
+        self.assertEqual(g.csv_viradas([]).count("\n"), 1)
+
+    def test_snapshot_publico_tira_os_volateis(self):
+        snap = {
+            "schema": 2,
+            "coletado_em": "2026-08-22T06:00:00-03:00",
+            "data_referencia": "2026-08-22",
+            "http": {"status": 200, "bytes_zip": 1, "sha256_json": "abc"},
+            "bruto_novo": True,
+            "viradas": [],
+        }
+        publico = g.snapshot_publico(snap)
+        self.assertEqual(
+            publico,
+            {
+                "schema": 2,
+                "data_referencia": "2026-08-22",
+                "http": {"status": 200, "sha256_json": "abc"},
+                "viradas": [],
+            },
+        )
+        # Puro: o snapshot do build continua inteiro.
+        self.assertIn("coletado_em", snap)
+        self.assertIn("bytes_zip", snap["http"])
+
+    def test_linha_dados_abertos_e_distribuicoes(self):
+        self.assertEqual(
+            g.linha_dados_abertos(CFG),
+            '<p class="dados-abertos">Dados abertos: '
+            '<a href="/repo/dados/viradas.json">JSON</a> · '
+            '<a href="/repo/dados/viradas.csv">CSV</a></p>',
+        )
+        self.assertEqual(
+            [f for f, _ in g.DISTRIBUICOES],
+            ["application/rss+xml", "application/json", "text/csv"],
+        )
+
+
+class TestEstaticos(unittest.TestCase):
+    def test_css_fontes_reescreve_o_prefixo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminhos = comum.Caminhos(raiz=tmp)
+            build = _build(tmp)
+            # Sem a pasta: vazio, e o site cai nas fontes do sistema.
+            self.assertEqual(g.css_fontes(build), "")
+            os.makedirs(caminhos.fontes)
+            with open(os.path.join(caminhos.fontes, "fontes.css"), "w") as f:
+                f.write("@font-face{src:url(/fontes/a.woff2)}")
+            self.assertEqual(
+                g.css_fontes(build), "@font-face{src:url(/repo/fontes/a.woff2)}"
+            )
+            build.cfg = SEM_PREFIXO
+            self.assertEqual(g.css_fontes(build), "@font-face{src:url(/fontes/a.woff2)}")
 
 
 class TestBuscaNcm(unittest.TestCase):

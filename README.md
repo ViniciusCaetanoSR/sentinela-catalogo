@@ -36,7 +36,8 @@ gerar_site.py   sem rede
                        dados/historico/*.json         ("o que mudou em 30 dias")
                        dados/lastmod.json             (hash por página do último build)
                        config.json, templates/, fontes/
-                grava  site/                          HTML estático, sitemaps, feed
+                grava  site/                          HTML estático, sitemaps, feed,
+                                            dados/viradas.{json,csv}
                        site/mudancas.txt              URLs que mudaram neste build
                        dados/lastmod.json             (versionado: é o que faz o
                                                        sitemap não mentir)
@@ -117,6 +118,8 @@ Três coisas acontecem no navegador (`templates/app.js`), não no build, e todas
 - **O prazo é recalculado com o relógio de quem lê.** O build é de manhã, em Brasília; cada "faltam N dias", cada barra de prazo e o número grande da home carregam `data-corte` (a data da virada) e são refeitos com a data local do navegador — inclusive "prazo vencido há N dias", que o build nunca escreve. Os textos vivem numa tabela única (`gerar_site.TEXTOS_PRAZO`) copiada literalmente para o JS, e um teste confere que as duas cópias são iguais.
 - **Dado velho tem aviso.** Toda página leva `data-referencia` no `<body>`; se o snapshot tiver mais de dois dias, uma faixa no topo diz "estes dados são de DD/MM/AAAA". O `vigia.yml` avisa quem mantém; a faixa avisa quem lê.
 - **"Ir para a NCM"** (home, `/ncm/` e 404) é um form sem backend: `84151090`, `8415.10.90` e `8415 10 90` levam à mesma página; 4 a 7 dígitos levam ao capítulo. Sem JS o envio cai no índice por capítulo. A página de erro também reconhece `/ncm/84151090/` e redireciona para a forma pontuada.
+
+O snapshot do dia também sai como **dados abertos**, em `/dados/viradas.json` (o `ultimo.json` normalizado, sem os campos voláteis da execução) e `/dados/viradas.csv` (uma virada por linha: NCM, atributo, nome, órgãos, data, vigência, modalidade), linkados no rodapé da tabela da home e declarados como `distribution` do `Dataset` em JSON-LD, ao lado do feed. Cada página de NCM e de atributo leva, no JSON-LD, um `WebPage.dateModified` que é a **mesma** data do `lastmod` do sitemap — o hash da página é calculado antes do HTML justamente para isso —, e toda data visível sai em `<time datetime>`.
 
 Um atributo só ganha página própria se tiver algo próprio a dizer. Os que valem para **uma única NCM** e cuja prosa é boilerplate repetido — 586 atributos chamados "Destaque", com a mesma orientação de 31 caracteres — não ganham: o conteúdo deles aparece dentro da página da NCM, que é onde ele sempre pertenceu. Sem esse corte, dois terços do site eram quase-duplicatas e as 888 páginas de atributo produziam 118 títulos distintos.
 

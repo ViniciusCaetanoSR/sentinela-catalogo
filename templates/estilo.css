@@ -1,7 +1,8 @@
 /* Folha única do site. Servida como arquivo externo com hash no nome:
    inline, ela era 12,3 KB repetidos em cada uma das páginas - 72% dos bytes
-   do site. A requisição a mais não existe: a folha de fontes já era externa
-   e bloqueante, e esta entra no mesmo lugar. */
+   do site. Os @font-face de fontes/fontes.css entram na frente desta, no
+   mesmo arquivo (gerar_estaticos): uma folha bloqueante por página, não
+   duas. */
 
 /* Transicao entre paginas: dissolve em vez do flash branco do navegador.
    Uma linha, e onde nao ha suporte a navegacao segue normal. E crossfade,
@@ -93,6 +94,11 @@ nav.trilha li[aria-current]{color:var(--ink)}
 
 /* ------------------------------------------------------------------ tabelas */
 .rolagem{overflow-x:auto;margin:30px 0}
+/* A linha "Dados abertos: JSON · CSV" logo abaixo da tabela da home. Cola
+   na tabela (que tem 30px de margem) e fica a uma distância normal do
+   aviso "nenhuma virada", quando é ele que está em cima. */
+.dados-abertos{margin:12px 0 30px;font-size:.86rem;color:var(--faint)}
+.rolagem+.dados-abertos{margin-top:-18px}
 .rolagem:focus-visible{outline:2px solid var(--accent-forte);outline-offset:3px}
 table{border-collapse:collapse;width:100%;font-size:.92rem;min-width:560px}
 caption{text-align:left;font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;

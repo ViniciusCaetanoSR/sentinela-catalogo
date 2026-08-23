@@ -12,8 +12,9 @@ Saida em site/:
     atributos/<CODIGO>/index.html
     atributos/index.html          indice
     orgaos/<slug>/index.html
-    estilo.<hash>.css, app.<hash>.js, og.png, favicon.svg, favicon-32.png,
-    apple-touch-icon.png
+    dados/viradas.json, dados/viradas.csv   o snapshot do dia, dados abertos
+    estilo.<hash>.css (com os @font-face dentro), app.<hash>.js, og.png,
+    favicon.svg, favicon-32.png, apple-touch-icon.png, fontes/*.woff2
     sitemap.xml (índice) + sitemap-*.xml, robots.txt, feed.xml, 404.html
 
 Também grava dados/lastmod.json: o hash do conteúdo de cada página e a data
@@ -29,9 +30,11 @@ Uso:
 """
 
 import argparse
+import csv
 import dataclasses
 import functools
 import hashlib
+import io
 import json
 import os
 import re
@@ -130,6 +133,10 @@ class Build:
     ncms_com_pagina: set = dataclasses.field(default_factory=set)
     # Atributos com página própria; decide link ou texto.
     com_pagina: set = dataclasses.field(default_factory=set)
+    # O lastmod.json do build anterior, lido no começo de gerar(): é o que
+    # permite escrever o dateModified real no JSON-LD de uma página ANTES de
+    # calcular_lastmod rodar, no fim (ver data_modificacao).
+    lastmod_anterior: dict = dataclasses.field(default_factory=dict)
 
 
 def esc(texto):
@@ -207,6 +214,18 @@ def br(iso):
         return ""
     a, m, d = iso.split("-")
     return f"{d}/{m}/{a}"
+
+
+def data_html(iso):
+    """<time datetime="2026-08-30">30/08/2026</time>.
+
+    A data visível continua no formato brasileiro; o datetime leva a forma
+    ISO, que é a que o buscador e a tecnologia assistiva leem sem adivinhar
+    se 08/07 é agosto ou julho. Vazio quando não há data.
+    """
+    if not iso:
+        return ""
+    return f'<time datetime="{esc(iso)}">{br(iso)}</time>'
 
 
 def plural(n, singular, plural_form):
@@ -387,23 +406,58 @@ def capitulo(ncm):
     return so_digitos[:2] or "00"
 
 
-def escrever(build, caminho_relativo, html, assinatura=None):
+def marca_de(assinatura):
+    """O hash curto que identifica o conteúdo de uma página no lastmod.json."""
+    return hashlib.sha256(assinatura.encode("utf-8")).hexdigest()[:12]
+
+
+def caminho_publicado(caminho_relativo):
+    """ncm/8415.10.90/index.html -> /ncm/8415.10.90/: a URL como o sitemap a vê."""
+    return "/" + caminho_relativo.replace("\\", "/").replace("index.html", "")
+
+
+def escrever(build, caminho_relativo, html, assinatura=None, marca=None):
     """Grava a página e registra o hash do conteúdo que importa.
 
     A assinatura é calculada por quem chama, a partir dos DADOS da página
     (ver assinatura_dados), e não do HTML: senão TODA página mudaria de hash
     todo dia por causa do rodapé com a data da coleta, e o lastmod voltaria
-    a ser a mentira que era.
+    a ser a mentira que era. Quem precisou do hash antes de renderizar (as
+    páginas que escrevem o próprio dateModified) passa a `marca` pronta.
     """
     destino = os.path.join(build.caminhos.site, caminho_relativo)
     os.makedirs(os.path.dirname(destino), exist_ok=True)
     with open(destino, "w", encoding="utf-8", newline="\n") as f:
         f.write(html)
-    caminho = "/" + caminho_relativo.replace("\\", "/").replace("index.html", "")
+    caminho = caminho_publicado(caminho_relativo)
     if assinatura is not None:
-        marca = hashlib.sha256(assinatura.encode("utf-8")).hexdigest()[:12]
+        marca = marca_de(assinatura)
+    if marca is not None:
         build.paginas[caminho] = marca
     return caminho
+
+
+def registro_vigente(anterior, caminho, marca):
+    """O [hash, data] do lastmod anterior, se ainda vale para esta página.
+
+    Vale quando o hash guardado é o mesmo de agora: a página não mudou de
+    conteúdo e a data dela continua sendo a de antes. Qualquer outra coisa
+    (página nova, hash diferente, registro malformado) devolve None. É a
+    regra única que calcular_lastmod e data_modificacao aplicam - os dois
+    têm de concordar, e um teste confere.
+    """
+    antes = anterior.get(caminho)
+    if isinstance(antes, list) and len(antes) == 2 and antes[0] == marca:
+        return antes
+    return None
+
+
+def data_modificacao(build, caminho, marca):
+    """A data que o lastmod vai carimbar nesta página, sabida ANTES de
+    escrevê-la: a de antes, se o hash não mudou; senão a da coleta de hoje.
+    É o dateModified do JSON-LD da página."""
+    antes = registro_vigente(build.lastmod_anterior, caminho, marca)
+    return antes[1] if antes else build.snapshot["data_referencia"]
 
 
 def assinatura_dados(titulo, descricao, dados):
@@ -568,6 +622,36 @@ def trilha_dados(cfg, itens):
     }
 
 
+def pagina_dados(cfg, caminho, data_modificada):
+    """WebPage com o dateModified REAL da página.
+
+    É o mesmo dado do lastmod do sitemap, agora dentro da página: o
+    buscador que lê o JSON-LD e o que lê o sitemap veem a mesma data, e
+    nenhum dos dois vê "hoje" numa página que não mudou. isPartOf aponta
+    para o Dataset da home, que é onde a procedência está declarada.
+    """
+    return {
+        "@type": "WebPage",
+        "url": absoluta(cfg, caminho),
+        "dateModified": data_modificada,
+        "isPartOf": {"@type": "Dataset", "url": absoluta(cfg, "/")},
+    }
+
+
+def grafo(*nos):
+    """Vários nós num JSON-LD só, sob @graph.
+
+    Duas tags <script type="application/ld+json"> por página funcionariam,
+    mas o @graph é a forma que o validador do Google prefere e deixa um
+    único @context. Cada nó chega com o seu @context (trilha_dados é usada
+    sozinha em outras páginas) e o perde aqui.
+    """
+    return {
+        "@context": "https://schema.org",
+        "@graph": [{k: v for k, v in no.items() if k != "@context"} for no in nos],
+    }
+
+
 def trilha_html(cfg, itens):
     """A mesma trilha, visível.
 
@@ -629,7 +713,7 @@ def pagina(build, corpo, titulo, descricao, caminho=None, itens_trilha=None, jso
             # No <body>, para o app.js medir a idade do dado e avisar quando
             # a coleta parou: o site no ar continua com cara de saudável.
             "data_referencia": esc(snapshot["data_referencia"]),
-            "coletado_em": br(snapshot["data_referencia"]),
+            "coletado_em": data_html(snapshot["data_referencia"]),
             "versao": esc(snapshot["contagens"]["versao"]),
             "formulario": bloco_formulario(cfg),
             "analytics": bloco_analytics(cfg) + bloco_jsonld(estruturado),
@@ -646,6 +730,52 @@ def rotulo(texto):
     return f' data-rot="{esc(texto)}"'
 
 
+# As três tabelas do site (home, NCM, órgão) saem destes helpers, e não
+# de marcação repetida, por causa de um detalhe do cartão mobile: abaixo de
+# 640px o CSS põe display:block em <tr> e <td>, e o navegador, ao seguir o
+# display, apaga a semântica de tabela da árvore de acessibilidade - o
+# leitor de tela passa a ouvir uma sequência de textos soltos. Os roles
+# explícitos (table, rowgroup, row, columnheader, cell) a devolvem; são
+# redundantes no desktop e necessários no celular, por isso vão sempre.
+
+
+def celula(conteudo, rot="", classe=""):
+    """<td role="cell">, com o rótulo que o cartão mobile anuncia.
+
+    rot vazio sai sem data-rot de propósito: no cartão, um rótulo seguido
+    de nada ("SITUAÇÃO" e mais nada) é uma pergunta sem resposta.
+    """
+    atributos = f' class="{classe}"' if classe else ""
+    if rot:
+        atributos += rotulo(rot)
+    return f'<td role="cell"{atributos}>{conteudo}</td>'
+
+
+def cabecalho(texto, classe="", oculto=False):
+    """<th scope="col" role="columnheader">. oculto esconde o texto só
+    visualmente - a coluna sem título da página do órgão continua nomeada
+    para quem navega por cabeçalho."""
+    atributos = f' class="{classe}"' if classe else ""
+    rotulo_th = f'<span class="oculto">{esc(texto)}</span>' if oculto else esc(texto)
+    return f'<th scope="col" role="columnheader"{atributos}>{rotulo_th}</th>'
+
+
+def linha(celulas, classe=""):
+    """<tr role="row"> com as células já montadas."""
+    atributos = f' class="{classe}"' if classe else ""
+    return f'<tr role="row"{atributos}>{"".join(celulas)}</tr>'
+
+
+def tabela(aria_label, legenda, cabecalhos, linhas):
+    """A tabela inteira, dentro da região rolável com foco por teclado."""
+    return (
+        f'<div class="rolagem" tabindex="0" role="region" aria-label="{esc(aria_label)}">'
+        f'<table role="table"><caption>{esc(legenda)}</caption>'
+        f'<thead role="rowgroup">{linha(cabecalhos)}</thead>'
+        f'<tbody role="rowgroup">{"".join(linhas)}</tbody></table></div>'
+    )
+
+
 def _celulas_virada(build, atributo, nome, orgaos, data, referencia):
     """As três células que lote e virada solta têm em comum: atributo,
     órgão e a data com o prazo."""
@@ -654,18 +784,22 @@ def _celulas_virada(build, atributo, nome, orgaos, data, referencia):
     urg = " urgente" if dias <= DIAS_URGENTE else ""
     # data-corte: o app.js refaz o prazo, a barra e a urgência com o "hoje"
     # do navegador. O texto do build fica como está para quem não roda JS.
-    return (
-        f"<td{rotulo('Atributo')}>"
-        f"{link_atributo(build, atributo, nome or atributo)}"
-        f'<br><span class="cod-inline">{esc(atributo)}</span></td>'
-        f"<td{rotulo('Órgão')}>{esc('/'.join(orgaos) or '—')}</td>"
-        f'<td class="data"{rotulo("Vira obrigatório em")}>'
-        f"{br(data)}"
-        f'<br><span class="prazo-txt{urg}" data-corte="{esc(data)}">'
-        f"{prazo_humano(dias)}</span>"
-        f'<span class="prazo{urg}"><i style="--w:{largura_prazo(dias)}%"></i></span>'
-        f"</td>"
-    )
+    return [
+        celula(
+            f"{link_atributo(build, atributo, nome or atributo)}"
+            f'<br><span class="cod-inline">{esc(atributo)}</span>',
+            "Atributo",
+        ),
+        celula(esc("/".join(orgaos) or "—"), "Órgão"),
+        celula(
+            f"{data_html(data)}"
+            f'<br><span class="prazo-txt{urg}" data-corte="{esc(data)}">'
+            f"{prazo_humano(dias)}</span>"
+            f'<span class="prazo{urg}"><i style="--w:{largura_prazo(dias)}%"></i></span>',
+            "Vira obrigatório em",
+            "data",
+        ),
+    ]
 
 
 def tabela_viradas(build, lotes, soltas, referencia):
@@ -684,33 +818,39 @@ def tabela_viradas(build, lotes, soltas, referencia):
     for lote in lotes:
         href = esc(url(build.cfg, f"/atributos/{lote['atributo']}/"))
         linhas.append(
-            f'<tr class="lote">'
-            f'<td class="lote-ncms"{rotulo("NCM")}>'
-            f"<strong>{milhar(len(lote['ncms']))} NCMs</strong><br>"
-            f'<a href="{href}">veja as NCMs na página do atributo</a></td>'
-            + _celulas_virada(
-                build,
-                lote["atributo"],
-                lote["nome"],
-                lote["orgaos"],
-                lote["data"],
-                referencia,
+            linha(
+                [
+                    celula(
+                        f"<strong>{milhar(len(lote['ncms']))} NCMs</strong><br>"
+                        f'<a href="{href}">veja as NCMs na página do atributo</a>',
+                        "NCM",
+                        "lote-ncms",
+                    )
+                ]
+                + _celulas_virada(
+                    build,
+                    lote["atributo"],
+                    lote["nome"],
+                    lote["orgaos"],
+                    lote["data"],
+                    referencia,
+                ),
+                "lote",
             )
-            + "</tr>"
         )
     for v in soltas[:TETO_LINHAS_HOME]:
         linhas.append(
-            f"<tr>"
-            f'<td class="ncm"{rotulo("NCM")}>{link_ncm(build, v["ncm"])}</td>'
-            + _celulas_virada(
-                build,
-                v["atributo"],
-                v["nome"],
-                v["orgaos"],
-                v["vira_obrigatorio_em"],
-                referencia,
+            linha(
+                [celula(link_ncm(build, v["ncm"]), "NCM", "ncm")]
+                + _celulas_virada(
+                    build,
+                    v["atributo"],
+                    v["nome"],
+                    v["orgaos"],
+                    v["vira_obrigatorio_em"],
+                    referencia,
+                )
             )
-            + "</tr>"
         )
     aviso = ""
     if len(soltas) > TETO_LINHAS_HOME:
@@ -721,13 +861,18 @@ def tabela_viradas(build, lotes, soltas, referencia):
             f"virada agendada</a>.</p>"
         )
     return (
-        '<div class="rolagem" tabindex="0" role="region" '
-        'aria-label="Viradas agendadas"><table>'
-        "<caption>Atributos com data marcada para virar obrigatórios</caption>"
-        '<thead><tr><th scope="col">NCM</th><th scope="col">Atributo</th>'
-        '<th scope="col">Órgão</th>'
-        '<th scope="col" class="data">Vira obrigatório em</th></tr></thead>'
-        f"<tbody>{''.join(linhas)}</tbody></table></div>{aviso}"
+        tabela(
+            "Viradas agendadas",
+            "Atributos com data marcada para virar obrigatórios",
+            [
+                cabecalho("NCM"),
+                cabecalho("Atributo"),
+                cabecalho("Órgão"),
+                cabecalho("Vira obrigatório em", "data"),
+            ],
+            linhas,
+        )
+        + aviso
     )
 
 
@@ -772,14 +917,14 @@ def tabela_atributos_ncm(build, atributos, detalhes):
         if a.get("vira_obrigatorio_em"):
             marca = (
                 f'<span class="tag muda">vira obrigatório em '
-                f"{br(a['vira_obrigatorio_em'])}</span>"
+                f"{data_html(a['vira_obrigatorio_em'])}</span>"
             )
         elif a.get("prazo_vencido"):
             # A data passou e o vínculo continua opcional. A hipótese central
             # do produto - a Receita troca obrigatorio para true na data -
             # nunca foi verificada; se ela falhar, a página diz a verdade em
             # vez de "opcional".
-            marca = f'<span class="tag venc">prazo vencido em {br(a["fim"])}</span>'
+            marca = f'<span class="tag venc">prazo vencido em {data_html(a["fim"])}</span>'
         elif a.get("obrigatorio"):
             marca = '<span class="tag obr">obrigatório</span>'
         else:
@@ -790,23 +935,27 @@ def tabela_atributos_ncm(build, atributos, detalhes):
         else:
             cod_html = f'<span class="sem-pagina">{esc(codigo)}</span>'
         linhas.append(
-            f"<tr>"
-            f'<td class="cod"{rotulo("Código")}>{cod_html}</td>'
-            f"<td{rotulo('Atributo')}>"
-            f"{_celula_atributo(build, a, detalhes)}</td>"
-            f"<td{rotulo('Órgão')}>{esc('/'.join(a.get('orgaos') or []) or '—')}</td>"
-            f"<td{rotulo('Modalidade')}>{esc(a.get('modalidade') or '—')}</td>"
-            f"<td{rotulo('Situação')}>{marca}</td>"
-            f"</tr>"
+            linha(
+                [
+                    celula(cod_html, "Código", "cod"),
+                    celula(_celula_atributo(build, a, detalhes), "Atributo"),
+                    celula(esc("/".join(a.get("orgaos") or []) or "—"), "Órgão"),
+                    celula(esc(a.get("modalidade") or "—"), "Modalidade"),
+                    celula(marca, "Situação"),
+                ]
+            )
         )
-    return (
-        '<div class="rolagem" tabindex="0" role="region" '
-        'aria-label="Atributos desta NCM"><table>'
-        "<caption>Atributos exigidos para esta NCM</caption>"
-        '<thead><tr><th scope="col">Código</th><th scope="col">Atributo</th>'
-        '<th scope="col">Órgão</th><th scope="col">Modalidade</th>'
-        '<th scope="col">Situação</th></tr></thead>'
-        f"<tbody>{''.join(linhas)}</tbody></table></div>"
+    return tabela(
+        "Atributos desta NCM",
+        "Atributos exigidos para esta NCM",
+        [
+            cabecalho("Código"),
+            cabecalho("Atributo"),
+            cabecalho("Órgão"),
+            cabecalho("Modalidade"),
+            cabecalho("Situação"),
+        ],
+        linhas,
     )
 
 
@@ -1076,6 +1225,107 @@ def prazos_alterados(vistos_antes, agora):
     return saida
 
 
+# ---------------------------------------------------------------- dados abertos
+
+# O snapshot do dia publicado em dois formatos, fora do sitemap (são dados,
+# não páginas) e declarados como distribution do Dataset da home, junto do
+# feed. O JSON é o ultimo.json normalizado; o CSV, só as viradas, uma por
+# linha, para quem vai cruzar com a planilha de SKUs sem escrever código.
+CAMINHO_JSON = "/dados/viradas.json"
+CAMINHO_CSV = "/dados/viradas.csv"
+COLUNAS_CSV = (
+    "ncm",
+    "atributo",
+    "nome",
+    "orgaos",
+    "vira_obrigatorio_em",
+    "vigente_desde",
+    "modalidade",
+)
+DISTRIBUICOES = (
+    ("application/rss+xml", "/feed.xml"),
+    ("application/json", CAMINHO_JSON),
+    ("text/csv", CAMINHO_CSV),
+)
+
+
+def publicador(cfg):
+    """O nó Organization do Sentinela, para publisher e creator do Dataset."""
+    return {
+        "@type": "Organization",
+        "name": "Sentinela do Catálogo",
+        "url": absoluta(cfg, "/"),
+    }
+
+
+def linha_dados_abertos(cfg):
+    """'Dados abertos: JSON · CSV' - a linha discreta da home, abaixo da tabela."""
+    return (
+        '<p class="dados-abertos">Dados abertos: '
+        f'<a href="{esc(url(cfg, CAMINHO_JSON))}">JSON</a> · '
+        f'<a href="{esc(url(cfg, CAMINHO_CSV))}">CSV</a></p>'
+    )
+
+
+def csv_viradas(viradas):
+    """As viradas em CSV (COLUNAS_CSV), órgãos separados por "/" como no site.
+
+    O módulo csv cuida das aspas: nome de atributo com vírgula ou aspas
+    existe no arquivo oficial. lineterminator é \\n para o arquivo sair
+    igual em qualquer sistema - a geração tem de ser determinística.
+    """
+    saida = io.StringIO()
+    escritor = csv.writer(saida, lineterminator="\n")
+    escritor.writerow(COLUNAS_CSV)
+    for v in viradas:
+        escritor.writerow(
+            [
+                v.get("ncm") or "",
+                v.get("atributo") or "",
+                v.get("nome") or "",
+                "/".join(v.get("orgaos") or []),
+                v.get("vira_obrigatorio_em") or "",
+                v.get("vigente_desde") or "",
+                v.get("modalidade") or "",
+            ]
+        )
+    return saida.getvalue()
+
+
+def snapshot_publico(snapshot):
+    """O snapshot como vai para site/dados/viradas.json.
+
+    Sai sem os campos voláteis (comum.VOLATEIS, no topo e dentro de "http"):
+    são fatos sobre a execução - a hora da coleta, o tamanho do ZIP daquele
+    download -, não sobre o catálogo, e com eles dois builds do mesmo dado
+    produziriam bytes diferentes. O site é determinístico, e um teste
+    confere. O que é do catálogo (versão, sha256 do JSON, contagens,
+    viradas) fica todo.
+    """
+    publico = {k: v for k, v in snapshot.items() if k not in comum.VOLATEIS}
+    if isinstance(publico.get("http"), dict):
+        publico["http"] = {
+            k: v for k, v in publico["http"].items() if k not in comum.VOLATEIS
+        }
+    return publico
+
+
+def gerar_dados(build):
+    """site/dados/viradas.json e viradas.csv.
+
+    O JSON é o snapshot já normalizado (normalizar_snapshot): cada virada
+    sai completa, com nome e órgãos dentro, para quem consome não precisar
+    cruzar com o mapa de atributos. Sem assinatura: não são páginas, não
+    entram no lastmod nem no sitemap.
+    """
+    escrever(
+        build,
+        "dados/viradas.json",
+        json.dumps(snapshot_publico(build.snapshot), ensure_ascii=False, indent=1) + "\n",
+    )
+    escrever(build, "dados/viradas.csv", csv_viradas(build.snapshot["viradas"]))
+
+
 # ---------------------------------------------------------------- páginas
 
 
@@ -1092,7 +1342,7 @@ def gerar_index(build):
         orgaos_lista = sorted({o for v in vs for o in v["orgaos"]})
         datas = sorted({v["vira_obrigatorio_em"] for v in vs})
         no_corte = sum(1 for v in vs if v["vira_obrigatorio_em"] == proxima)
-        seguinte = br(datas[1]) if len(datas) > 1 else "—"
+        seguinte = data_html(datas[1]) if len(datas) > 1 else "—"
         unidade = prazo_humano(dias, "unidade")
         juntos = esc("/".join(orgaos_lista))
         # O número grande e o "dias" são visuais (aria-hidden, porque o JS
@@ -1114,7 +1364,7 @@ def gerar_index(build):
             f'<span class="contagem-un" aria-hidden="true">{unidade}</span>'
             "</p>"
             '<div class="contagem-fatos">'
-            f"<div><span>corte</span>{br(proxima)}</div>"
+            f"<div><span>corte</span>{data_html(proxima)}</div>"
             f"<div><span>órgão</span>{juntos}</div>"
             f"<div><span>vínculos</span>{milhar(no_corte)} de {milhar(len(vs))}</div>"
             f"<div><span>próximo</span>{seguinte}</div>"
@@ -1180,12 +1430,13 @@ def gerar_index(build):
     corpo = preencher(
         template(build.caminhos.templates, "index.html"),
         {
-            "data_ref": br(snapshot["data_referencia"]),
+            "data_ref": data_html(snapshot["data_referencia"]),
             "h1": h1,
             "lede": esc(lede),
             "cartao": cartao,
             "busca": form_ncm(cfg),
             "tabela": tabela_viradas(build, lotes, soltas, ref),
+            "dados_abertos": linha_dados_abertos(cfg),
             "historico": historico,
             "base": esc(prefixo(cfg)),
         },
@@ -1221,7 +1472,12 @@ def gerar_index(build):
             "comércio exterior",
         ],
         "spatialCoverage": {"@type": "Country", "name": "Brasil"},
-        "creator": {
+        # Quem publica ESTE conjunto (a extração) é o Sentinela; a Receita é
+        # a fonte. Antes ela aparecia como creator, o que atribuía ao governo
+        # um arquivo que ele nunca publicou neste formato.
+        "publisher": publicador(cfg),
+        "creator": publicador(cfg),
+        "sourceOrganization": {
             "@type": "GovernmentOrganization",
             "name": "Portal Único de Comércio Exterior — Receita Federal",
         },
@@ -1229,9 +1485,10 @@ def gerar_index(build):
         "distribution": [
             {
                 "@type": "DataDownload",
-                "encodingFormat": "application/rss+xml",
-                "contentUrl": absoluta(cfg, "/feed.xml"),
+                "encodingFormat": formato,
+                "contentUrl": absoluta(cfg, caminho),
             }
+            for formato, caminho in DISTRIBUICOES
         ],
     }
     # O h1 ("nos próximos N dias") e o cartão ficam fora da assinatura de
@@ -1358,17 +1615,7 @@ def gerar_ncms(build):
                 f"{br(proxima)}. Lista completa dos atributos exigidos para "
                 f"esta NCM."
             )
-            corpo = preencher(
-                template(build.caminhos.templates, "ncm.html"),
-                {
-                    "ncm": esc(ncm),
-                    "ncm_digitos": esc(digitos),
-                    "h1": esc(h1),
-                    "lede": esc(lede),
-                    "aviso": aviso,
-                    "tabela": tabela_atributos_ncm(build, atributos, detalhes),
-                },
-            )
+            molde = "ncm.html"
         else:
             h1 = (
                 f"NCM {ncm}: {len(atributos)} "
@@ -1391,17 +1638,7 @@ def gerar_ncms(build):
                 f"({digitos}) no Catálogo de Produtos do Portal Único, com "
                 f"órgão anuente, opções válidas e situação de cada um."
             )
-            corpo = preencher(
-                template(build.caminhos.templates, "ncm_simples.html"),
-                {
-                    "ncm": esc(ncm),
-                    "ncm_digitos": esc(digitos),
-                    "h1": esc(h1),
-                    "lede": esc(lede),
-                    "aviso": aviso,
-                    "tabela": tabela_atributos_ncm(build, atributos, detalhes),
-                },
-            )
+            molde = "ncm_simples.html"
 
         # A tabela mostra, para quem não tem página própria, a orientação e
         # as opções do atributo: isso é conteúdo da página e entra aqui.
@@ -1431,12 +1668,39 @@ def gerar_ncms(build):
                 for a in atributos
             ],
         }
+        # Dados -> hash -> data -> render -> escrever: o dateModified do
+        # JSON-LD precisa existir antes do HTML, e ele vem do hash.
+        caminho = f"/ncm/{ncm}/"
+        marca = marca_de(assinatura_dados(titulo, descricao, dados_pagina))
+        modificada = data_modificacao(build, caminho, marca)
+        corpo = preencher(
+            template(build.caminhos.templates, molde),
+            {
+                "ncm": esc(ncm),
+                "ncm_digitos": esc(digitos),
+                "h1": esc(h1),
+                "lede": esc(lede),
+                "aviso": aviso,
+                "tabela": tabela_atributos_ncm(build, atributos, detalhes),
+            },
+        )
         caminhos.append(
             escrever(
                 build,
                 f"ncm/{ncm}/index.html",
-                pagina(build, corpo, titulo, descricao, f"/ncm/{ncm}/", itens_trilha),
-                assinatura=assinatura_dados(titulo, descricao, dados_pagina),
+                pagina(
+                    build,
+                    corpo,
+                    titulo,
+                    descricao,
+                    caminho,
+                    itens_trilha,
+                    jsonld=grafo(
+                        trilha_dados(build.cfg, itens_trilha),
+                        pagina_dados(build.cfg, caminho, modificada),
+                    ),
+                ),
+                marca=marca,
             )
         )
 
@@ -1652,7 +1916,7 @@ def gerar_atributos(build):
             aviso = (
                 f'<div class="aviso"><strong data-corte="{esc(data)}">'
                 f"{prazo_humano(dias, 'frase')}</strong> "
-                f"Este atributo vira obrigatório em {br(data)} para "
+                f"Este atributo vira obrigatório em {data_html(data)} para "
                 f"{milhar(len(ncms_v))} {plural(len(ncms_v), 'NCM', 'NCMs')}:"
                 f'<ul class="limpa" style="margin-top:10px">{lista}</ul></div>'
             )
@@ -1764,6 +2028,24 @@ def gerar_atributos(build):
                 f'<ul class="limpa">{itens}</ul>'
             )
 
+        titulo = titulo_atributo(a)
+        dados_pagina = {
+            "atributo": a,
+            "viradas": [virada_estavel(v) for v in vs],
+            "vizinhos": [[vizinho, nomes[vizinho]] for vizinho in vizinhos[:10]],
+            "orgaos_com_pagina": [o for o in orgaos_do_atributo if o in slug_por_orgao],
+            "ncms_com_pagina": [n for n in mostradas if n in build.ncms_com_pagina],
+        }
+        # Como em gerar_ncms: o hash vem antes do HTML, porque o
+        # dateModified do JSON-LD depende dele.
+        caminho = f"/atributos/{cod}/"
+        marca = marca_de(assinatura_dados(titulo, descricao, dados_pagina))
+        modificada = data_modificacao(build, caminho, marca)
+        itens_trilha = [
+            ("Início", "/"),
+            ("Atributos", "/atributos/"),
+            (nome, caminho),
+        ]
         corpo = preencher(
             template(build.caminhos.templates, "atributo.html"),
             {
@@ -1779,7 +2061,6 @@ def gerar_atributos(build):
                 "ncms": f'<ul class="limpa">{chips}</ul>' if chips else "",
             },
         )
-        titulo = titulo_atributo(a)
         caminhos.append(
             escrever(
                 build,
@@ -1789,30 +2070,14 @@ def gerar_atributos(build):
                     corpo,
                     titulo,
                     descricao,
-                    f"/atributos/{cod}/",
-                    [
-                        ("Início", "/"),
-                        ("Atributos", "/atributos/"),
-                        (nome, f"/atributos/{cod}/"),
-                    ],
+                    caminho,
+                    itens_trilha,
+                    jsonld=grafo(
+                        trilha_dados(build.cfg, itens_trilha),
+                        pagina_dados(build.cfg, caminho, modificada),
+                    ),
                 ),
-                assinatura=assinatura_dados(
-                    titulo,
-                    descricao,
-                    {
-                        "atributo": a,
-                        "viradas": [virada_estavel(v) for v in vs],
-                        "vizinhos": [
-                            [vizinho, nomes[vizinho]] for vizinho in vizinhos[:10]
-                        ],
-                        "orgaos_com_pagina": [
-                            o for o in orgaos_do_atributo if o in slug_por_orgao
-                        ],
-                        "ncms_com_pagina": [
-                            n for n in mostradas if n in build.ncms_com_pagina
-                        ],
-                    },
-                ),
+                marca=marca,
             )
         )
 
@@ -1892,22 +2157,29 @@ def gerar_orgaos(build):
             # Sem marca, a célula sai sem rótulo: no cartão mobile um
             # "SITUAÇÃO" seguido de nada era uma pergunta sem resposta.
             linhas.append(
-                f'<tr><td class="cod"{rotulo("Código")}>'
-                f"{link_atributo(build, a['codigo'], a['codigo'])}</td>"
-                f"<td{rotulo('Atributo')}>{esc(a.get('nome') or '—')}</td>"
-                f"<td{rotulo('Preenchimento')}>{esc(forma)}</td>"
-                f'<td class="num"{rotulo("NCMs")}>{milhar(a.get("total_ncms", 0))}</td>'
-                f"<td{rotulo('Situação') if marca else ''}>{marca}</td></tr>"
+                linha(
+                    [
+                        celula(
+                            link_atributo(build, a["codigo"], a["codigo"]), "Código", "cod"
+                        ),
+                        celula(esc(a.get("nome") or "—"), "Atributo"),
+                        celula(esc(forma), "Preenchimento"),
+                        celula(milhar(a.get("total_ncms", 0)), "NCMs", "num"),
+                        celula(marca, "Situação" if marca else ""),
+                    ]
+                )
             )
-        tabela = (
-            '<div class="rolagem" tabindex="0" role="region" '
-            f'aria-label="Atributos exigidos pelo {esc(o["orgao"])}"><table>'
-            f"<caption>Atributos exigidos pelo {esc(o['orgao'])}</caption>"
-            '<thead><tr><th scope="col">Código</th>'
-            '<th scope="col">Atributo</th><th scope="col">Preenchimento</th>'
-            '<th scope="col" class="num">NCMs</th>'
-            '<th scope="col"><span class="oculto">Situação</span></th></tr></thead>'
-            f"<tbody>{''.join(linhas)}</tbody></table></div>"
+        tabela_html = tabela(
+            f"Atributos exigidos pelo {o['orgao']}",
+            f"Atributos exigidos pelo {o['orgao']}",
+            [
+                cabecalho("Código"),
+                cabecalho("Atributo"),
+                cabecalho("Preenchimento"),
+                cabecalho("NCMs", "num"),
+                cabecalho("Situação", oculto=True),
+            ],
+            linhas,
         )
 
         n = o["total_atributos"]
@@ -1942,7 +2214,7 @@ def gerar_orgaos(build):
                 "h1": esc(h1),
                 "lede": esc(lede),
                 "aviso": aviso,
-                "tabela": tabela,
+                "tabela": tabela_html,
             },
         )
         titulo = f"Atributos do {o['orgao']} — Catálogo de Produtos do Portal Único"
@@ -2163,12 +2435,32 @@ def gerar_imagens(build):
     escrever(build, "favicon.svg", favicon)
 
 
+def css_fontes(build):
+    """fontes/fontes.css com os url(/fontes/...) já sob o base_path.
+
+    O prefixo do base_path não alcança arquivo externo ao HTML, então a
+    reescrita é feita aqui. Vazio quando não há pasta de fontes (o site
+    cai nas fontes do sistema, que a pilha de font-family já prevê).
+    """
+    origem = os.path.join(build.caminhos.fontes, "fontes.css")
+    if not os.path.isfile(origem):
+        return ""
+    with open(origem, encoding="utf-8") as f:
+        css = f.read()
+    marca = prefixo(build.cfg)
+    if marca:
+        css = css.replace("url(/fontes/", f"url({marca}/fontes/")
+    return css
+
+
 def gerar_estaticos(build):
     """CSS e JS em arquivo externo, com hash de conteúdo no nome.
 
     Inline eles eram 16,5 KB repetidos em cada página - 72% dos bytes do
-    site. A requisição a mais não existe na prática: a folha de fontes já
-    era externa e bloqueante.
+    site. A folha de fontes entra NA FRENTE do estilo, no mesmo arquivo:
+    eram duas folhas bloqueantes por página, e os @font-face precisam ser
+    lidos antes de qualquer regra que os use. Uma requisição a menos em
+    11 mil páginas, e os preload dos woff2 no <head> continuam valendo.
 
     Só o CSS perde os comentários: a expressão que os remove não entende
     string nem regex, e em JS um "/*" dentro de aspas ou de uma regex
@@ -2181,6 +2473,7 @@ def gerar_estaticos(build):
         with open(os.path.join(build.caminhos.templates, origem), encoding="utf-8") as f:
             conteudo = f.read()
         if chave == "css":
+            conteudo = css_fontes(build) + "\n" + conteudo
             # Os comentários explicam o código para quem mantém, não para
             # quem visita: 3,8 KB deles viajavam em cada página.
             conteudo = re.sub(r"/\*.*?\*/", "", conteudo, flags=re.S)
@@ -2197,27 +2490,18 @@ def gerar_fontes(build):
     Auto-hospedadas de propósito: a única requisição a terceiro que o site
     faz é a do GoatCounter, declarada na página de privacidade - carregar do
     Google Fonts acrescentaria outra, sem estar declarada. São fontes
-    variáveis: um arquivo por subset serve todos os pesos.
+    variáveis: um arquivo por subset serve todos os pesos. O fontes.css
+    não é copiado: ele vive dentro da folha única (gerar_estaticos), e
+    nenhuma página o linka.
     """
     if not os.path.isdir(build.caminhos.fontes):
         return
     destino = os.path.join(build.caminhos.site, "fontes")
     os.makedirs(destino, exist_ok=True)
-    marca = prefixo(build.cfg)
     for nome in os.listdir(build.caminhos.fontes):
-        origem = os.path.join(build.caminhos.fontes, nome)
         if nome.endswith(".css"):
-            with open(origem, encoding="utf-8") as f:
-                css = f.read()
-            # O prefixo de base_path não alcanca arquivo externo ao HTML.
-            if marca:
-                css = css.replace("url(/fontes/", f"url({marca}/fontes/")
-            with open(
-                os.path.join(destino, nome), "w", encoding="utf-8", newline=chr(10)
-            ) as f:
-                f.write(css)
-        else:
-            shutil.copy2(origem, os.path.join(destino, nome))
+            continue
+        shutil.copy2(os.path.join(build.caminhos.fontes, nome), os.path.join(destino, nome))
 
 
 def gerar_cname(build):
@@ -2373,8 +2657,8 @@ def calcular_lastmod(anterior, paginas, hoje, marca_templates):
     for caminho, marca in paginas.items():
         if caminho.startswith("__"):
             continue
-        antes = anterior.get(caminho)
-        if isinstance(antes, list) and len(antes) == 2 and antes[0] == marca:
+        antes = registro_vigente(anterior, caminho, marca)
+        if antes:
             atual[caminho] = antes
         else:
             atual[caminho] = [marca, hoje]
@@ -2535,13 +2819,16 @@ def gerar(build):
 
     Devolve (caminhos_publicados, mudadas, rebuild).
 
-    A ordem importa em dois pontos: os estáticos vêm antes de qualquer
-    página (as páginas referenciam o nome com hash), e o sitemap vem por
-    último, depois do lastmod, porque é dele que lê as datas.
+    A ordem importa em três pontos: o lastmod anterior é lido antes de
+    qualquer página (as de NCM e de atributo escrevem o próprio
+    dateModified a partir dele), os estáticos vêm antes das páginas (que
+    referenciam o nome com hash), e o sitemap vem por último, depois do
+    lastmod novo, porque é dele que lê as datas.
     """
     if os.path.isdir(build.caminhos.site):
         shutil.rmtree(build.caminhos.site)
 
+    build.lastmod_anterior = ler_lastmod(build.caminhos.lastmod)
     gerar_estaticos(build)
     caminhos = []
     caminhos += gerar_index(build)
@@ -2551,12 +2838,13 @@ def gerar(build):
     caminhos += gerar_privacidade(build)
     gerar_404(build)
     gerar_feed(build)
+    gerar_dados(build)
     gerar_imagens(build)
     gerar_fontes(build)
     gerar_cname(build)
     gerar_indexnow(build)
     datas, mudadas, rebuild = calcular_lastmod(
-        ler_lastmod(build.caminhos.lastmod),
+        build.lastmod_anterior,
         build.paginas,
         build.snapshot["data_referencia"],
         hash_templates(build.caminhos),
