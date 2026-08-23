@@ -50,44 +50,48 @@ python -m unittest discover -s tests -v
 - **Mensagem = frase imperativa, sem prefixo**: "Tirar RSS do menu", não "feat: tira RSS" nem "ci: ...". O Dependabot segue a mesma regra.
 - Uma branch por assunto; PR contra `main`. O CI (`ci.yml`) roda em todo push e PR e tem de ficar verde.
 
-### `dados/` nunca entra em branch de feature
+### `dados/` não é parte de `main`
 
-`dados/` é escrito **pelo bot**, todo dia, em `main`. Se uma branch de feature carrega mudança em `dados/` — porque você rodou `python coletor.py` localmente, por exemplo — o merge conflita exatamente na linha que sempre difere, e o conflito não tem resolução certa: o bot vai regenerar tudo no próximo run de qualquer jeito.
+`dados/` é escrito **pelo bot**, todo dia, na branch órfã `dados`. Em `main` a pasta é ignorada pelo git (`/dados/` no `.gitignore`): ela existe no seu disco como worktree daquela branch, e não há como commitá-la aqui nem por engano. Antes disso, o dado morava em `main` e toda branch de feature conflitava na linha que sempre difere.
 
-Antes de commitar, tire `dados/` do que vai entrar:
-
-```bash
-git restore --staged --worktree dados
-```
-
-Ao rebasear uma branch antiga sobre `main`, pegue o `dados/` de lá em vez de resolver conflito:
+Monte o worktree uma vez, depois de clonar:
 
 ```bash
-git checkout origin/main -- dados
+git worktree add dados dados     # a branch 'dados' vira a pasta dados/
+git -C dados pull                 # traz a coleta de hoje
 ```
 
-A única exceção é `dados/lastmod.json` quando a mudança **é** no gerador e altera o que ele grava ali — e mesmo assim, prefira deixar o bot regravar.
+Sem ele, `dados/` fica vazio e `python gerar_site.py` não acha o que ler.
+
+Se você rodar `python coletor.py` localmente, o resultado cai no worktree — ou seja, numa cópia da branch do bot. **Não commite**: o bot regenera tudo no run seguinte, e um commit seu ali só cria divergência para o retry dele resolver.
+
+```bash
+git -C dados checkout -- .        # desfaz o que a coleta local escreveu
+```
 
 Não versionados (e nunca devem ser): `site/`, `dados/completo.json`, `dados/bruto.zip`.
 
 ### Mover `dados/` para a branch própria
 
-Está **pronto e desligado**. O bot commita em `main` todo dia, e isso custa duas coisas: `main` não pode exigir pull request (o `GITHUB_TOKEN` não passa por cima de um ruleset, e a coleta pararia no dia seguinte) e toda branch de feature conflita na linha que sempre difere. A saída é uma branch órfã `dados`, sem código e sem histórico em comum com `main`, cuja raiz é o que hoje vive em `dados/`.
+**Feito em 2026-08-23.** Fica aqui o registro do que foi feito, porque é o que explica o `git worktree` do dia a dia e é o roteiro de como desfazer.
 
-Os workflows já sabem viver dos dois jeitos, e quem decide é a variável de repositório `BRANCH_DADOS`. **Enquanto ela não existir, nada muda**: o passo *Onde ficam os dados* define `DIR_DADOS=dados` e `BRANCH_ALVO` = a branch do checkout, e cada passo seguinte faz exatamente o que sempre fez. Preenchida com `dados`, um segundo `actions/checkout` traz a branch para `dados-branch/`, e é lá que o coletor grava (`--dados`), o gerador lê (`--dados`) e o commit acontece (`git -C`).
+O bot commitava em `main` todo dia, e isso custava duas coisas: `main` não podia exigir pull request (o `GITHUB_TOKEN` não passa por cima de um ruleset, e a coleta pararia no dia seguinte) e toda branch de feature conflitava na linha que sempre difere. A saída foi uma branch órfã `dados`, sem código e sem histórico em comum com `main`, cuja raiz é o que antes vivia em `dados/`.
 
-A ordem de ativação — e ela importa:
+Os workflows sabem viver dos dois jeitos, e quem decide é a variável de repositório `BRANCH_DADOS`. Vazia, o passo *Onde ficam os dados* define `DIR_DADOS=dados` e `BRANCH_ALVO` = a branch do checkout, e cada passo seguinte faz o que fazia antes da mudança. Em `dados`, um segundo `actions/checkout` traz a branch para `dados-branch/`, e é lá que o coletor grava (`--dados`), o gerador lê (`--dados`) e o commit acontece (`git -C`).
 
-1. mergear esta branch em `main`. Nada muda: a variável ainda não existe;
+A ordem seguida — e ela importa, se um dia isto for refeito noutro repositório:
+
+1. mergear em `main` o código que lê `BRANCH_DADOS`. Nada muda: a variável ainda não existe;
 2. `bash ferramentas/migrar-dados.sh`. Cria a branch `dados` **localmente**, a partir do `dados/` commitado. Não empurra nada, não escreve um byte no diretório de trabalho, recusa rodar com mudança pendente e, na segunda vez, não faz nada;
 3. `git push origin dados`;
 4. definir `BRANCH_DADOS` = `dados` em *Settings > Secrets and variables > Actions > Variables*. **É aqui que a mudança liga**;
-5. rodar *Coletar e publicar* pelo *Run workflow* e conferir que o commit do dia caiu na branch `dados`, e não em `main`;
-6. só então tirar `dados/` de `main`, por PR: `git rm -r --cached dados` e `/dados/` no `.gitignore`. Antes de o passo 5 dar certo, não — o dado do dia ainda está ali;
-7. criar o ruleset em `main`: PR obrigatório, check `ci`, sem force-push. A partir do passo 4 o bot não empurra mais em `main`, que é justamente o que faltava para isso ser possível;
-8. localmente, `git worktree add dados dados`. A branch passa a aparecer como uma pasta `dados/` ao lado do código, e `python gerar_site.py` volta a funcionar sem argumento nenhum.
+5. rodar *Coletar e publicar* pelo *Run workflow* e conferir, no log, que tudo aponta para `dados-branch/` e que nenhum commit caiu em `main`;
+6. só então tirar `dados/` de `main`: `git rm -r --cached dados` e `/dados/` no `.gitignore`. Antes de o passo 5 dar certo, não — o dado do dia ainda está ali;
+7. localmente, `git worktree add dados dados`.
 
-Para voltar atrás em qualquer ponto até o 5, apague a variável: no run seguinte tudo volta para `main`, e o `dados/` de lá continua onde estava.
+Falta um passo, e ele é uma decisão de governança, não de código: **o ruleset em `main`** (PR obrigatório, check `ci`, sem force-push). Ele só passou a ser possível porque o bot não empurra mais aqui.
+
+Para desfazer, apague a variável `BRANCH_DADOS`: no run seguinte o bot volta a gravar em `dados/` dentro de `main` — e aí é preciso destravar a pasta, tirando `/dados/` do `.gitignore` e removendo o worktree (`git worktree remove dados`). A branch `dados` continua onde está, com o histórico do período.
 
 Depois do passo 8, `dados` é o nome de uma branch **e** de uma pasta, e o git não sabe qual você quer: escreva `git log dados --`.
 

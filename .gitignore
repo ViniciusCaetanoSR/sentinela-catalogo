@@ -11,14 +11,12 @@ desktop.ini
 .env
 *.zip
 site/
-# Mapa completo NCM -> atributos: ~4,8 MB regenerados todo dia, consumidos
-# pelo gerador no mesmo run do CI. Versionar isso seria 4,8 MB de churn
-# diário. O render sem coleta (render.yml) o recupera do cache do Actions.
-dados/completo.json
-# O ZIP oficial do dia, como veio da Receita (já coberto por *.zip, mas
-# explícito para ninguém achar que foi esquecido). Os bytes mudam a cada
-# pedido; o que vale guardar é o Release bruto-<versao> que o workflow cria.
-dados/bruto.zip
+# dados/ não vive mais aqui: o estado do bot é a branch órfã "dados", e
+# esta pasta é o worktree dela (git worktree add dados dados). Enquanto o
+# git a ignorar, o bot nunca mais empurra em main - foi isso que abriu
+# caminho para exigir PR e o check "ci" nesta branch. Ver o CONTRIBUTING,
+# seção "Mover dados/ para a branch própria".
+/dados/
 *.tmp
 .coverage
 .ruff_cache/

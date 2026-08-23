@@ -106,7 +106,7 @@ Dois scripts de verdade, dois auxiliares e um módulo comum; entre os scripts, n
 - **`gerar_site.py`** é uma função pura de `dados/` + `templates/` para `site/`. Roda sem rede, determinístico: o mesmo dado gera os mesmos bytes. O estado de uma geração vive num `Build` passado explicitamente a cada função. Por isso existe `lastmod.json`: hash de cada página no último build, para que o sitemap só carimbe data nova no que mudou de fato. O arquivo guarda também, sob `__templates__`, o hash de `templates/` e de `fontes/fontes.css`: quando ele muda (ou quando o `lastmod.json` não existe) o build é um *rebuild* — o HTML de toda página mudou sem que o dado tenha mudado — e `mudancas.txt` leva só a raiz. Fora disso leva todas as URLs que mudaram, sem teto.
 - **`site/status.json`** é a prova de vida do build, e o único arquivo do site deliberadamente volátil: traz `data_referencia`, `versao`, `gerado_em`, `paginas`, `viradas`, `proximo_corte` e `schema`. Fica **fora do sitemap e do `lastmod.json`** — `gerado_em` muda a cada build e carimbaria data nova todo dia numa URL que ninguém precisa indexar. É o que o passo *Conferir o que foi publicado* baixa da URL pública depois do deploy, para exigir que o site no ar seja o build desta run (a data certa e ao menos 5 000 páginas) em vez de um artifact velho ou um `base_path` errado.
 - **`indexnow.py`** e **`servir.py`** são invólucros finos. O primeiro avisa os buscadores das URLs em `mudancas.txt`; o segundo é preview.
-- **`dados/`** é o estado. Versionado em `main` por enquanto, escrito só pelo bot (ver [CONTRIBUTING.md](CONTRIBUTING.md) sobre por que nunca entra em branch de feature, e sobre a branch própria que já está pronta e desligada). `completo.json` e `bruto.zip` ficam de fora por tamanho e churn.
+- **`dados/`** é o estado, escrito só pelo bot. Não vive em `main`: é a branch órfã [`dados`](#a-branch-dados), montada aqui como worktree. `completo.json` e `bruto.zip` ficam de fora até dela, por tamanho e churn.
 
 ## O que o site publica
 
@@ -177,9 +177,20 @@ Se o cache não existir (repositório novo, ou cache expirado por inatividade de
 
 ## A branch `dados`
 
-Cada coleta deixa dois commits em `main` — o snapshot e o `lastmod` —, e o preço disso é alto: `main` não pode exigir pull request, porque o `GITHUB_TOKEN` não passa por cima de um ruleset e a coleta pararia na manhã seguinte; e toda branch de feature conflita na linha que sempre difere.
+O estado do bot vive numa branch órfã chamada `dados` — sem código e sem histórico em comum com `main`, com o conteúdo que antes ficava em `dados/` na raiz. **Ativa desde 2026-08-23.**
 
-A saída está **pronta e desligada**: uma branch órfã `dados`, sem código e sem histórico em comum com `main`, com o conteúdo de `dados/` na raiz. Os três workflows que tocam o dado — *Coletar*, *Renderizar* e *Vigia* — leem a variável de repositório `BRANCH_DADOS` e, **enquanto ela não existir, nada muda** — o dado continua em `main`, exatamente como hoje. Preenchida com `dados`, um segundo `actions/checkout` traz a branch para `dados-branch/`, e é de lá que o coletor grava (`--dados`), o gerador lê (`--dados`) e o commit sai (`git -C`). `ferramentas/migrar-dados.sh` cria a branch localmente, a partir do `dados/` que está em `main`, sem empurrar nada e sem tocar no diretório de trabalho. A ordem de ativação, passo a passo, está em [CONTRIBUTING.md](CONTRIBUTING.md#mover-dados-para-a-branch-própria).
+Ela existe porque cada coleta deixava dois commits em `main` — o snapshot e o `lastmod` —, e o preço era alto: `main` não podia exigir pull request (o `GITHUB_TOKEN` não passa por cima de um ruleset, e a coleta pararia na manhã seguinte), e toda branch de feature conflitava na linha que sempre difere.
+
+Os três workflows que tocam o dado — *Coletar*, *Renderizar* e *Vigia* — leem a variável de repositório `BRANCH_DADOS`. Com ela em `dados`, um segundo `actions/checkout` traz a branch para `dados-branch/`, e é de lá que o coletor grava (`--dados`), o gerador lê (`--dados`) e o commit sai (`git -C`). Esvaziar a variável devolve tudo para `main` sem mexer em código — é a saída de emergência, e o motivo de o caminho antigo continuar escrito.
+
+Para trabalhar com o dado localmente, monte a branch como worktree dentro da pasta que o git agora ignora:
+
+```bash
+git worktree add dados dados     # uma vez; dados/ passa a ser a branch
+git -C dados pull                 # traz a coleta de hoje
+```
+
+Sem isso, `dados/` fica vazio e `python gerar_site.py` não acha o que ler. `ferramentas/migrar-dados.sh` é o script que criou a branch; ele se recusa a rodar de novo. O passo a passo completo, inclusive como desfazer, está em [CONTRIBUTING.md](CONTRIBUTING.md#mover-dados-para-a-branch-própria).
 
 ## Armadilhas do endpoint
 
