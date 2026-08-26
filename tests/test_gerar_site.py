@@ -208,6 +208,34 @@ class TestFormulario(unittest.TestCase):
     def test_placeholder_quando_nao_ha_nada(self):
         self.assertIn("pendente", g.bloco_formulario(CFG))
 
+    def test_com_ncm_o_pedido_e_sobre_a_ncm_da_pagina(self):
+        # Das 10.516 paginas de NCM so nove tem virada: nas outras a unica
+        # oferta e o aviso futuro, e pedir "informe suas NCMs" faz o visitante
+        # digitar de cabeca o codigo impresso no topo da pagina que ele le.
+        s = g.bloco_formulario(dict(CFG, contato_email="a@b.test"), "8415.10.90")
+        self.assertIn("Avise-me quando a NCM 8415.10.90 mudar", s)
+        self.assertIn("Quero%20acompanhar%20a%20NCM%208415.10.90", s)
+        # O codigo ja vai na primeira linha do corpo, nao em branco.
+        self.assertIn("%3A%0A8415.10.90", s)
+
+    def test_sem_ncm_o_pedido_continua_generico(self):
+        s = g.bloco_formulario(dict(CFG, contato_email="a@b.test"))
+        self.assertIn("Enviar minhas NCMs por e-mail", s)
+        self.assertIn("Quero%20acompanhar%20minhas%20NCMs", s)
+
+    def test_o_clique_no_cta_e_contado(self):
+        # Sem o atributo, "nenhum e-mail chegou" fica indistinguivel de
+        # "ninguem viu o botao" - e e essa distincao que diz se o que falta
+        # e trafego, e o botao ou e a oferta. O count.js liga o listener
+        # sozinho; nao ha JS a escrever aqui.
+        for ncm in (None, "8415.10.90"):
+            s = g.bloco_formulario(dict(CFG, contato_email="a@b.test"), ncm)
+            self.assertIn('data-goatcounter-click="cta-email"', s)
+            # E o rotulo do evento fixo: sem ele o count.js usa o texto do
+            # botao, que agora muda em cada uma das 10.516 paginas de NCM, e a
+            # linha unica do painel fica etiquetada por uma NCM ao acaso.
+            self.assertIn('data-goatcounter-title="cta-email"', s)
+
 
 class TestConfig(unittest.TestCase):
     def test_conjunto_de_chaves_documentado(self):
@@ -647,6 +675,227 @@ class TestHistorico(unittest.TestCase):
         # Arquivo depois da referencia e nome que nao e data ficam de fora.
         self.assertNotIn(("futuro", "A", "2099-01-01"), vista)
         self.assertNotIn(("x", "A", "2099-01-01"), vista)
+
+
+class TestSaidaDaLista(unittest.TestCase):
+    """Os quatro desfechos de uma virada que sai da lista.
+
+    Antes a pagina dizia "ja passaram da data OU foram removidas" e deixava o
+    leitor escolher - tendo o mapa completo em maos para saber qual foi. No
+    dia seguinte ao vencimento de um lote esta secao e a manchete do site, e e
+    a unica vez em que ele pode provar que a coisa que promete vigiar
+    acontece. O caso "passou e continua opcional" e a hipotese central do
+    produto falhando, que sem isto so apareceria num ::warning:: de log que
+    ninguem le.
+
+    A referencia destes testes e 2026-08-22, e a data anunciada e um parametro
+    de proposito: os dois defeitos mais caros deste bloco aparecem so quando a
+    data anunciada AINDA NAO CHEGOU - a Receita que recua antes do prazo, e a
+    que vira o campo antes dele. A primeira data real que este codigo vai
+    narrar, 30/08/2026, cai num domingo.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.build = _build(self.tmp.name)
+        os.makedirs(self.build.caminhos.historico)
+
+    def _grava(self, nome, viradas):
+        caminho = os.path.join(self.build.caminhos.historico, nome)
+        with open(caminho, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"viradas": list(viradas)}))
+
+    def _saiu(self, ncms, data="2026-08-21"):
+        """Uma virada de ontem ausente hoje, com o mapa completo dado."""
+        self._grava(
+            "2026-08-21.json",
+            [
+                {
+                    "ncm": "1",
+                    "atributo": "A",
+                    "nome": "Nome do atributo",
+                    "vira_obrigatorio_em": data,
+                }
+            ],
+        )
+        self._grava("2026-08-22.json", [])
+        self.build.completo = {"ncms": ncms, "atributos": {}}
+        return g.bloco_historico(self.build, date(2026, 8, 22))
+
+    def test_virou_obrigatorio(self):
+        html = self._saiu({"1": [["A", True, "Importação", "2026-08-21"]]})
+        self.assertIn("<h4>Viraram obrigatórios</h4>", html)
+        self.assertIn("Nome do atributo: virou obrigatório em 21/08/2026", html)
+        self.assertNotIn("Já passaram da data ou foram removidas", html)
+
+    def test_virou_antes_da_data_anunciada_nao_poe_data_futura_no_passado(self):
+        # A Receita vira o campo antes do prazo. A data guardada e a
+        # ANUNCIADA, nao a observada: dizer "virou obrigatorio em 30/08" no
+        # dia 22/08 seria afirmar no passado uma data que ainda nao chegou.
+        html = self._saiu({"1": [["A", True, "Importação", None]]}, data="2026-08-30")
+        self.assertIn("<h4>Viraram obrigatórios</h4>", html)
+        self.assertIn(
+            "Nome do atributo: virou obrigatório antes de 30/08/2026, a data anunciada",
+            html,
+        )
+        self.assertNotIn("virou obrigatório em 30/08/2026", html)
+
+    def test_data_cancelada_antes_de_vencer_nao_diz_que_passou(self):
+        # A Receita retira a dataFimVigencia antes do prazo: o vinculo some da
+        # lista de viradas (coletor.viradas exige fim nao nulo) e continua
+        # opcional. Afirmar "passou da data em 30/08" no dia 22/08 seria dizer,
+        # sobre dado oficial, uma coisa que nao aconteceu.
+        html = self._saiu({"1": [["A", False, "Importação", None]]}, data="2026-08-30")
+        self.assertIn("<h4>Tiveram a data cancelada</h4>", html)
+        self.assertIn("Nome do atributo: perdeu a data de 30/08/2026", html)
+        self.assertNotIn("passou da data", html)
+
+    def test_prazo_sumiu_do_mapa_e_cancelado_mesmo_com_data_ja_vencida(self):
+        # Sem fim de vigencia no mapa nao da para afirmar que o prazo venceu:
+        # os 15.080 vinculos ja obrigatorios do arquivo real tem fim nulo, ou
+        # seja a Receita limpa a data na transicao. "Perdeu a data" cobre os
+        # dois sentidos sem escolher um.
+        html = self._saiu({"1": [["A", False, "Importação", None]]})
+        self.assertIn("<h4>Tiveram a data cancelada</h4>", html)
+        self.assertNotIn("passou da data", html)
+
+    def test_passou_da_data_e_continua_opcional(self):
+        html = self._saiu({"1": [["A", False, "Importação", "2026-08-21"]]})
+        self.assertIn("<h4>Passaram da data e continuam opcionais</h4>", html)
+        self.assertIn(
+            "Nome do atributo: passou da data em 21/08/2026 e continua opcional", html
+        )
+
+    def test_vinculo_removido_saiu_do_catalogo(self):
+        html = self._saiu({"1": [["OUTRO", True, "Importação", None]]})
+        self.assertIn("<h4>Saíram do Catálogo</h4>", html)
+        self.assertIn("Nome do atributo: saiu do Catálogo", html)
+
+    def test_ncm_inteira_removida_saiu_do_catalogo(self):
+        html = self._saiu({"2": [["A", True, "Importação", None]]})
+        self.assertIn("<h4>Saíram do Catálogo</h4>", html)
+
+    def test_nome_do_atributo_vem_do_mapa_quando_o_historico_nao_guarda(self):
+        # O arquivo do dia guarda so o que e do VINCULO: nome e orgaos sao do
+        # atributo e ficam de fora, para uma virada em massa nao repetir o
+        # mesmo nome dez mil vezes. Sem este desempate a manchete de 31/08
+        # sairia com o codigo cru - "ATT_13240" no lugar do nome.
+        self._grava(
+            "2026-08-21.json",
+            [{"ncm": "1", "atributo": "ATT_13240", "vira_obrigatorio_em": "2026-08-21"}],
+        )
+        self._grava("2026-08-22.json", [])
+        self.build.completo = {
+            "ncms": {"1": [["ATT_13240", True, "Importação", None]]},
+            "atributos": {"ATT_13240": {"n": "Referência de licenciamento Inmetro"}},
+        }
+        html = g.bloco_historico(self.build, date(2026, 8, 22))
+        self.assertIn("Referência de licenciamento Inmetro: virou obrigatório", html)
+        self.assertNotIn("ATT_13240:", html)
+
+    def test_atributo_fora_do_mapa_cai_no_codigo(self):
+        # Um atributo que saiu do Catalogo nao tem nome em lugar nenhum - nem
+        # no historico (que nao guarda) nem no mapa (de onde ele sumiu). O
+        # codigo e o ultimo recurso, e e melhor que uma linha sem sujeito.
+        self._grava(
+            "2026-08-21.json",
+            [{"ncm": "1", "atributo": "ATT_SUMIU", "vira_obrigatorio_em": "2026-08-21"}],
+        )
+        self._grava("2026-08-22.json", [])
+        self.build.completo = {
+            "ncms": {"9": [["Z", True, "Importação", None]]},
+            "atributos": {},
+        }
+        html = g.bloco_historico(self.build, date(2026, 8, 22))
+        self.assertIn("ATT_SUMIU: saiu do Catálogo", html)
+
+    def test_sem_mapa_completo_volta_a_frase_de_antes(self):
+        # Sem mapa, dizer qual dos tres foi seria chute - e chute com cara de
+        # fato e pior que a frase vaga.
+        html = self._saiu({})
+        self.assertIn("Já passaram da data ou foram removidas pela Receita.", html)
+        self.assertNotIn("<h4>", html)
+        self.assertIn("Nome do atributo", html)
+
+    def _lote(self, quantas, obrigatorio, data="2026-08-21", fim="2026-08-21"):
+        """Uma coorte do mesmo atributo: `quantas` NCMs, o mesmo desfecho."""
+        inicio = getattr(self, "_proxima_ncm", 0)
+        self._proxima_ncm = inicio + quantas
+        viradas = [
+            {
+                "ncm": f"{i:04d}",
+                "atributo": "A",
+                "nome": "Atributo em lote",
+                "vira_obrigatorio_em": data,
+            }
+            for i in range(inicio, inicio + quantas)
+        ]
+        vinculos = {
+            f"{i:04d}": [["A", obrigatorio, "Importação", fim]]
+            for i in range(inicio, inicio + quantas)
+        }
+        return viradas, vinculos
+
+    def _monta_lotes(self, *coortes):
+        viradas, vinculos = [], {}
+        for v, n in coortes:
+            viradas += v
+            vinculos.update(n)
+        self._grava("2026-08-21.json", viradas)
+        self._grava("2026-08-22.json", [])
+        self.build.completo = {"ncms": vinculos, "atributos": {}}
+        return g.bloco_historico(self.build, date(2026, 8, 22))
+
+    def test_lote_partido_rende_uma_linha_em_cada_sublista(self):
+        # O limiar de lote vale DENTRO do desfecho: se a Receita virou parte
+        # do lote e deixou o resto opcional, sao duas noticias, nao uma.
+        # LIMIAR_LOTE de um lado e LIMIAR_LOTE+1 do outro prendem as DUAS
+        # margens da fronteira: com `>=` no lugar de `>`, o lado que nao devia
+        # agrupar agrupa e o teste morre.
+        n = g.LIMIAR_LOTE + 1
+        html = self._monta_lotes(
+            self._lote(n, True),
+            self._lote(g.LIMIAR_LOTE, False),
+        )
+        self.assertIn("<h4>Viraram obrigatórios</h4>", html)
+        self.assertIn(f"virou obrigatório em 21/08/2026 para {n} NCMs", html)
+        # As LIMIAR_LOTE que nao viraram ficam SOLTAS, uma linha cada.
+        self.assertIn("<h4>Passaram da data e continuam opcionais</h4>", html)
+        self.assertIn(
+            "Atributo em lote: passou da data em 21/08/2026 e continua opcional", html
+        )
+        self.assertNotIn(
+            f"passou da data em 21/08/2026 e continua opcional em {g.LIMIAR_LOTE} NCMs",
+            html,
+        )
+        # A ordem das sublistas e a de DESTINOS_SAIDA, e ela e a manchete:
+        # "viraram" abre a secao, nao fecha.
+        self.assertLess(html.index("<h4>Viraram"), html.index("<h4>Passaram"))
+
+    def test_duas_datas_no_mesmo_atributo_rendem_duas_linhas(self):
+        # `sumiram` cobre os 30 dias da janela: duas coortes do mesmo atributo
+        # anunciadas para datas diferentes caem juntas. Agrupar so por atributo
+        # daria uma linha com a data de uma delas valendo por todas - e a outra
+        # data sumiria da pagina.
+        n = g.LIMIAR_LOTE + 1
+        html = self._monta_lotes(
+            self._lote(n, True, data="2026-08-21", fim="2026-08-21"),
+            self._lote(n, True, data="2026-08-15", fim="2026-08-15"),
+        )
+        self.assertIn(f"virou obrigatório em 21/08/2026 para {n} NCMs", html)
+        self.assertIn(f"virou obrigatório em 15/08/2026 para {n} NCMs", html)
+
+    def test_lote_que_saiu_do_catalogo(self):
+        # A virada em massa que o produto mais teme (cClassTrib, opcional em
+        # 10.516 NCMs) pode terminar assim: o vinculo some do mapa inteiro.
+        n = g.LIMIAR_LOTE + 1
+        viradas, _ = self._lote(n, True)
+        # O mapa existe (senao o desfecho seria None, o de nao saber); o que
+        # nao existe mais nele sao as NCMs do lote.
+        html = self._monta_lotes((viradas, {"9999": [["Z", True, "Importação", None]]}))
+        self.assertIn("<h4>Saíram do Catálogo</h4>", html)
+        self.assertIn(f"saiu do Catálogo para {n} NCMs</li>", html)
 
 
 class TestFeed(unittest.TestCase):

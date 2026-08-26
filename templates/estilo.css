@@ -39,10 +39,14 @@ a:hover{color:var(--accent-forte)}
    neles a forma ja diz que e link. */
 main p a:not(.botao),.lede a,.aviso a:not(.limpa a),.fonte a{
   text-decoration:underline;text-underline-offset:.15em;text-decoration-thickness:1px}
-h1,h2,h3{line-height:1.1;margin:0;text-wrap:balance}
+h1,h2,h3,h4{line-height:1.1;margin:0;text-wrap:balance}
 h1{font-size:clamp(1.9rem,4.6vw,2.9rem);letter-spacing:-.035em;font-weight:600}
 h2{font-size:1.35rem;margin-top:48px;letter-spacing:-.02em;font-weight:600}
 h3{font-size:1.05rem;margin-top:30px;font-weight:600}
+/* As sub-rubricas de "Sairam da lista", um degrau ABAIXO do h3 que as
+   governa. Sem esta regra o h4 cai no estilo do navegador (1em sobre os
+   17px do body, peso 700) e sai maior e mais forte que o proprio h3. */
+h4{font-size:.9rem;margin:22px 0 6px;font-weight:600;color:var(--muted)}
 p{margin:14px 0}
 code{font-family:var(--mono);font-size:.92em}
 

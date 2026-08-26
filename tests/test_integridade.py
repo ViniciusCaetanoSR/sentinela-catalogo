@@ -1333,11 +1333,16 @@ class TestModoLote(unittest.TestCase):
         )
         self.assertNotIn("9001.00.07</a> — Código", home)
         # E quando o lote passa da data (dentro da janela de 30 dias do
-        # historico), sai da lista em massa - um item, nao N.
+        # historico), sai da lista em massa - um item, nao N. Nesta fixture o
+        # atributo continua opcional depois da data, entao o desfecho e o do
+        # meio: a data passou e a Receita nao trocou o campo.
         self._roda(tmp.name, n=n, referencia=date(2026, 9, 2), data="2026-09-01")
         home = _le(site, "index.html")
         self.assertIn("<h3>Saíram da lista</h3>", home)
-        self.assertIn(f"saiu da lista para {n} NCMs</li>", home)
+        self.assertIn("<h4>Passaram da data e continuam opcionais</h4>", home)
+        self.assertIn(
+            f"passou da data em 01/09/2026 e continua opcional em {n} NCMs</li>", home
+        )
         self.assertNotIn("9001.00.07</a> — Código", home)
 
     def test_mudancas_sem_teto_fora_de_rebuild(self):

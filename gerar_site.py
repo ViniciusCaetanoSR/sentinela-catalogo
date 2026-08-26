@@ -534,7 +534,15 @@ def frase_lote(lote):
     )
 
 
-def bloco_formulario(cfg):
+def bloco_formulario(cfg, ncm=None):
+    """A captura. Com `ncm`, o pedido é sobre a NCM que a página mostra.
+
+    Das 10.516 páginas de NCM, só nove têm virada agendada: as outras dizem
+    "nenhum tem virada agendada hoje" e a única coisa que ainda podem
+    oferecer é o aviso da próxima. Pedir ali "informe as NCMs que você
+    mantém" faz o visitante digitar de cabeça o código impresso no topo da
+    própria página que ele está lendo - e é onde o funil perde mais gente.
+    """
     url_form = cfg.get("form_embed_url")
     if url_form:
         return (
@@ -544,12 +552,19 @@ def bloco_formulario(cfg):
 
     email = cfg.get("contato_email")
     if email:
-        assunto = "Quero acompanhar minhas NCMs"
+        if ncm:
+            assunto = f"Quero acompanhar a NCM {ncm}"
+            primeira = f"Minhas NCMs (uma por linha):{chr(10)}{ncm}"
+            rotulo = f"Avise-me quando a NCM {ncm} mudar"
+        else:
+            assunto = "Quero acompanhar minhas NCMs"
+            primeira = "Minhas NCMs (uma por linha):"
+            rotulo = "Enviar minhas NCMs por e-mail"
         # Sem escapes de nova linha aqui: montado por join para não quebrar
         # em nenhuma camada de shell ou heredoc.
         corpo = chr(10).join(
             [
-                "Minhas NCMs (uma por linha):",
+                primeira,
                 "",
                 "",
                 "",
@@ -564,8 +579,18 @@ def bloco_formulario(cfg):
             f"&body={urllib.parse.quote(corpo)}"
         )
         return (
-            f'<p><a class="botao" href="{esc(href)}">'
-            f"Enviar minhas NCMs por e-mail</a></p>"
+            # data-goatcounter-click: o count.js liga o listener sozinho e
+            # conta o clique como evento, sem uma linha de JS aqui. Sem isso,
+            # "nenhum e-mail chegou" é indistinguível de "ninguém viu o
+            # botão" - e é essa distinção que diz se o que falta é tráfego,
+            # é o botão ou é a oferta.
+            # O -title junto, e fixo: sem ele o count.js usa o texto do botão,
+            # que agora muda em cada uma das 10.516 páginas de NCM. Como o
+            # agrupamento no painel é pelo -click, os 10 mil títulos colapsam
+            # numa linha só, rotulada pela NCM de quem clicou por último.
+            f'<p><a class="botao" data-goatcounter-click="cta-email" '
+            f'data-goatcounter-title="cta-email" '
+            f'href="{esc(href)}">{esc(rotulo)}</a></p>'
             f'<p style="font-size:.86rem;color:var(--faint);margin-top:12px">'
             f"Abre seu cliente de e-mail com a mensagem pronta. "
             f"Sem cadastro e sem senha.</p>"
@@ -675,13 +700,20 @@ def trilha_html(cfg, itens):
     )
 
 
-def pagina(build, corpo, titulo, descricao, caminho=None, itens_trilha=None, jsonld=None):
+def pagina(
+    build, corpo, titulo, descricao, caminho=None, itens_trilha=None, jsonld=None, ncm=None
+):
     """Monta a página completa sobre base.html.
 
     caminho=None é a página de erro: ela não tem URL própria (o Pages a serve
     em qualquer endereço ausente), então sai sem canonical e sem og:url, e
     com noindex - um canonical fixo em /404/ convidaria o Google a indexar
     a página de erro como se fosse conteúdo.
+
+    ncm só é passado pelas páginas de NCM, e serve à captura: é a diferença
+    entre pedir "informe suas NCMs" e pedir a que o visitante está lendo. Nas
+    de atributo e de órgão ele fica de fora de propósito - lá o recorte não é
+    uma NCM, é um conjunto, e pré-preencher uma só seria chutar qual.
     """
     cfg, snapshot = build.cfg, build.snapshot
     trilha = trilha_html(cfg, itens_trilha or [])
@@ -716,7 +748,7 @@ def pagina(build, corpo, titulo, descricao, caminho=None, itens_trilha=None, jso
             "data_referencia": esc(snapshot["data_referencia"]),
             "coletado_em": data_html(snapshot["data_referencia"]),
             "versao": esc(snapshot["contagens"]["versao"]),
-            "formulario": bloco_formulario(cfg),
+            "formulario": bloco_formulario(cfg, ncm),
             "analytics": bloco_analytics(cfg) + bloco_jsonld(estruturado),
         },
     )
@@ -1072,6 +1104,129 @@ def primeira_vista(dir_historico, referencia):
     return vista
 
 
+# Os quatro desfechos de uma virada que saiu da lista, na ordem em que
+# aparecem na página. None é o quinto caso, o de não saber: sem o mapa completo
+# em mãos (os testes de unidade do bloco montam um build sem ele) a lista volta
+# a ser uma só, com o texto genérico de antes.
+DESTINOS_SAIDA = ("virou", "opcional", "cancelado", "saiu", None)
+
+RUBRICA_SAIDA = {
+    "virou": "<h4>Viraram obrigatórios</h4>",
+    "opcional": "<h4>Passaram da data e continuam opcionais</h4>",
+    "cancelado": "<h4>Tiveram a data cancelada</h4>",
+    "saiu": "<h4>Saíram do Catálogo</h4>",
+    None: (
+        "<p style='font-size:.92rem;color:var(--muted)'>"
+        "Já passaram da data ou foram removidas pela Receita.</p>"
+    ),
+}
+
+
+def destino_da_virada(build, ncm, atributo, ref_iso):
+    """O que aconteceu com um par (ncm, atributo) que saiu da lista de viradas.
+
+    O mapa completo de hoje sabe qual foi, e até agora a página não perguntava:
+    dizia "já passaram da data OU foram removidas" e deixava o leitor escolher.
+
+    Um par está na lista de viradas enquanto valem as três condições que o
+    coletor exige (coletor.viradas): opcional, com fim de vigência, e com o fim
+    ainda por vir. Sai quando qualquer uma cai, e é a que caiu que dá o
+    desfecho - por isso a comparação é com o fim de vigência de HOJE, o mesmo
+    predicado que a tabela da página da NCM usa para `prazo_vencido`, e não com
+    a data anunciada no histórico:
+
+    - virou: o vínculo está obrigatório. A virada aconteceu.
+    - opcional: continua opcional e o prazo venceu. É a hipótese central do
+      produto falhando, hoje visível só num ::warning:: de log que ninguém lê.
+    - cancelado: continua opcional e o prazo não está mais lá (ou não venceu).
+      A Receita recuou antes da data - dizer "passou da data" aqui seria
+      afirmar, sobre dado oficial, uma coisa que não aconteceu.
+    - saiu: o vínculo, ou a NCM inteira, não existe mais no Catálogo.
+
+    Devolve None quando não há mapa nenhum para consultar - aí a distinção
+    seria chute, e chute com cara de fato é pior que a frase vaga de antes.
+    """
+    ncms = build.completo.get("ncms") if build.completo else None
+    if not ncms:
+        return None
+    vinculos = ncms.get(ncm)
+    if vinculos is None:
+        return "saiu"
+    for v in vinculos:
+        # A forma de completo.json: [codigo, obrigatorio, modalidade, fim].
+        if v and v[0] == atributo:
+            if len(v) > 1 and v[1]:
+                return "virou"
+            fim = v[3] if len(v) > 3 else None
+            if fim is not None and ref_iso and fim < ref_iso:
+                return "opcional"
+            return "cancelado"
+    return "saiu"
+
+
+def nome_do_atributo(build, codigo, guardado=None):
+    """O nome legível de um atributo, com o código cru como último recurso.
+
+    O histórico diário guarda só o que é do VÍNCULO (ver coletor.viradas): o
+    nome e os órgãos são do ATRIBUTO e ficam de fora de propósito, para uma
+    virada em massa não repetir o mesmo nome dez mil vezes no arquivo do dia.
+    Então `guardado` quase sempre vem vazio, e quem tem o nome é o mapa
+    completo de hoje - o mesmo `detalhes.get(codigo)["n"]` que a tabela da
+    página da NCM usa. Sem ele (um atributo que saiu do Catálogo) sobra o
+    código, que é o que a lista mostrava antes deste desempate existir.
+
+    Isto nunca apareceu no ar: o bloco "O que mudou" só renderiza quando algo
+    muda, e nada mudou entre 2026-08-20 e 2026-08-26. A primeira vez que ele
+    vai aparecer é no dia seguinte a um lote vencer.
+    """
+    if guardado:
+        return guardado
+    detalhes = (build.completo.get("atributos") or {}) if build.completo else {}
+    return (detalhes.get(codigo) or {}).get("n") or codigo
+
+
+def frase_saida(destino, data, ref_iso, nome=None, quantas=None):
+    """A frase de um item de "Saíram da lista", por desfecho.
+
+    Duas formas, e o sujeito muda entre elas: com `quantas` é a linha de lote,
+    em que quem fala é o atributo ("virou obrigatório ... para 3.000 NCMs");
+    com `nome` é a NCM solta, e o nome do atributo abre a frase.
+
+    `data` é a data ANUNCIADA, guardada no histórico - não a data em que o
+    desfecho foi observado, que ninguém mede. Quando ela ainda não chegou, a
+    virada aconteceu ANTES do anunciado, e a frase não pode pôr no passado uma
+    data futura: 30/08/2026, a primeira que este código vai narrar, cai num
+    domingo, e virar o campo na sexta anterior é o caminho mais provável.
+    """
+    quando = f" em {br(data)}" if data else ""
+    de_quando = f" de {br(data)}" if data else ""
+    cedo = bool(data) and bool(ref_iso) and data > ref_iso
+    if quantas is not None:
+        alvo = f"{milhar(quantas)} NCMs"
+        if destino == "virou":
+            if cedo:
+                return f"virou obrigatório antes{de_quando}, a data anunciada, para {alvo}"
+            return f"virou obrigatório{quando} para {alvo}"
+        if destino == "opcional":
+            return f"passou da data{quando} e continua opcional em {alvo}"
+        if destino == "cancelado":
+            return f"perdeu a data{de_quando} e continua opcional em {alvo}"
+        if destino == "saiu":
+            return f"saiu do Catálogo para {alvo}"
+        return f"saiu da lista para {alvo}"
+    if destino == "virou":
+        if cedo:
+            return f"{nome}: virou obrigatório antes{de_quando}, a data anunciada"
+        return f"{nome}: virou obrigatório{quando}"
+    if destino == "opcional":
+        return f"{nome}: passou da data{quando} e continua opcional"
+    if destino == "cancelado":
+        return f"{nome}: perdeu a data{de_quando} e continua opcional"
+    if destino == "saiu":
+        return f"{nome}: saiu do Catálogo"
+    return nome
+
+
 def bloco_historico(build, referencia):
     """O que mudou nos ultimos 30 dias, montado do arquivo diario.
 
@@ -1129,7 +1284,7 @@ def bloco_historico(build, referencia):
     def item_lote(atributo, nome, texto):
         # Um item por lote, como na home e no feed: a lista das NCMs vive na
         # página do atributo - quando ele tem uma (build.com_pagina).
-        quem = nome or atributo
+        quem = nome_do_atributo(build, atributo, nome)
         if atributo in build.com_pagina:
             quem = link_atributo(build, atributo, quem)
         else:
@@ -1151,39 +1306,63 @@ def bloco_historico(build, referencia):
         itens += "".join(
             item(
                 v["ncm"],
-                f"{v.get('nome') or v['atributo']}, a partir de "
-                f"{br(v['vira_obrigatorio_em'])}",
+                f"{nome_do_atributo(build, v['atributo'], v.get('nome'))}, "
+                f"a partir de {br(v['vira_obrigatorio_em'])}",
             )
             for v in sorted(soltas, key=lambda x: x["vira_obrigatorio_em"])
         )
         partes.append(f"<h3>Viradas novas</h3><ul>{itens}</ul>")
     if sumiram:
-        # O mesmo limiar de lote, por atributo: quando uma virada em massa
-        # passa da data, ela sai da lista em massa.
-        por_atributo = {}
+        # Uma sublista por desfecho, em vez de uma lista só com "passaram da
+        # data OU foram removidas". No dia seguinte ao vencimento de um lote
+        # esta é a manchete do site, e é a única vez em que ele pode provar
+        # que a coisa que promete vigiar acontece de verdade - ou mostrar,
+        # em público, que não aconteceu.
+        ref_iso = referencia.isoformat()
+        por_destino = {}
         for n, c in sumiram:
-            por_atributo.setdefault(c, []).append(n)
-        em_lote = {c for c, ns in por_atributo.items() if len(ns) > LIMIAR_LOTE}
-        itens = "".join(
-            item_lote(
-                c,
-                vistos_antes[(por_atributo[c][0], c)]["nome"],
-                f"saiu da lista para {milhar(len(por_atributo[c]))} NCMs",
+            destino = destino_da_virada(build, n, c, ref_iso)
+            por_destino.setdefault(destino, []).append((n, c))
+        partes.append("<h3>Saíram da lista</h3>")
+        for destino in DESTINOS_SAIDA:
+            pares = por_destino.get(destino)
+            if not pares:
+                continue
+            # O mesmo limiar de lote de agrupar_viradas, e a MESMA chave dele:
+            # (atributo, data). Só por atributo não serve aqui - `sumiram`
+            # cobre os 30 dias da janela, então duas coortes do mesmo atributo,
+            # anunciadas para datas diferentes, conviveriam numa linha só e a
+            # data da primeira NCM valeria por todas. O limiar vale DENTRO do
+            # desfecho: um lote que virou pela metade rende duas linhas, uma em
+            # cada sublista, e é essa a notícia.
+            por_coorte = {}
+            for n, c in pares:
+                por_coorte.setdefault((c, vistos_antes[(n, c)]["data"]), []).append(n)
+            em_lote = {k for k, ns in por_coorte.items() if len(ns) > LIMIAR_LOTE}
+            itens = "".join(
+                item_lote(
+                    c,
+                    vistos_antes[(por_coorte[(c, data)][0], c)]["nome"],
+                    frase_saida(destino, data, ref_iso, quantas=len(por_coorte[(c, data)])),
+                )
+                for c, data in sorted(em_lote, key=lambda k: (k[0], k[1] or ""))
             )
-            for c in sorted(em_lote)
-        )
-        # Mostra o NOME, como a lista de cima. Antes esta mostrava o código
-        # cru (ATT_13241) para o mesmo conceito.
-        itens += "".join(
-            item(n, vistos_antes[(n, c)]["nome"] or c)
-            for n, c in sumiram
-            if c not in em_lote
-        )
-        partes.append(
-            "<h3>Saíram da lista</h3><p style='font-size:.92rem;color:var(--muted)'>"
-            "Já passaram da data ou foram removidas pela Receita.</p>"
-            f"<ul>{itens}</ul>"
-        )
+            # Mostra o NOME, como a lista de cima. Antes esta mostrava o código
+            # cru (ATT_13241) para o mesmo conceito.
+            itens += "".join(
+                item(
+                    n,
+                    frase_saida(
+                        destino,
+                        vistos_antes[(n, c)]["data"],
+                        ref_iso,
+                        nome=nome_do_atributo(build, c, vistos_antes[(n, c)]["nome"]),
+                    ),
+                )
+                for n, c in pares
+                if (c, vistos_antes[(n, c)]["data"]) not in em_lote
+            )
+            partes.append(f"{RUBRICA_SAIDA[destino]}<ul>{itens}</ul>")
     if alterados:
         # Agrupado por (atributo, de, para): um lote que a Receita adiou de
         # uma vez é um item, como na home. O texto é neutro de propósito -
@@ -1193,7 +1372,7 @@ def bloco_historico(build, referencia):
             grupos.setdefault((c, antes, depois), []).append(n)
         itens = ""
         for (c, antes, depois), ns in sorted(grupos.items()):
-            nome = agora[(ns[0], c)].get("nome") or c
+            nome = nome_do_atributo(build, c, agora[(ns[0], c)].get("nome"))
             mudanca = f"de {br(antes)} para {br(depois)}"
             if len(ns) > LIMIAR_LOTE:
                 itens += item_lote(c, nome, f"{mudanca} em {milhar(len(ns))} NCMs")
@@ -1700,6 +1879,9 @@ def gerar_ncms(build):
                         trilha_dados(build.cfg, itens_trilha),
                         pagina_dados(build.cfg, caminho, modificada),
                     ),
+                    # O único callsite que passa a NCM: ele cobre os dois
+                    # moldes de página de NCM (ncm.html e ncm_simples.html).
+                    ncm=ncm,
                 ),
                 marca=marca,
             )
