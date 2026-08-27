@@ -763,6 +763,7 @@ class TestSiteFecha(unittest.TestCase):
         cfg = {
             "dominio": "sentinela.exemplo.test",
             "indexnow_key": "a1b2c3d4",
+            "google_verificacao": "googleabc123.html",
             "goatcounter_code": 'x"y',
             "form_embed_url": "https://form.test/e?a=1&b=2",
         }
@@ -771,6 +772,13 @@ class TestSiteFecha(unittest.TestCase):
         self._confere_fechado(site, "")
         self.assertEqual(_le(site, "CNAME"), "sentinela.exemplo.test\n")
         self.assertEqual(_le(site, "a1b2c3d4.txt"), "a1b2c3d4")
+        # O conteúdo é derivado do nome: o Google entrega o arquivo com uma
+        # linha só, que é o próprio nome dele. Guardar as duas coisas no
+        # config seria manter duas em sincronia para nada.
+        self.assertEqual(
+            _le(site, "googleabc123.html"),
+            "google-site-verification: googleabc123.html",
+        )
         home = _le(site, "index.html")
         self.assertIn(
             '<script data-goatcounter="https://x&quot;y.goatcounter.com/count" async '
@@ -785,6 +793,7 @@ class TestSiteFecha(unittest.TestCase):
         lastmod = _lastmod(tmp.name)
         self.assertNotIn("/CNAME", lastmod)
         self.assertNotIn("/a1b2c3d4.txt", lastmod)
+        self.assertNotIn("/googleabc123.html", lastmod)
         for nome in os.listdir(site):
             if nome.startswith("sitemap") and nome.endswith(".xml"):
                 self.assertNotIn("CNAME", _le(site, nome))

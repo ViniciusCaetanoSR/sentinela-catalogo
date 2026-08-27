@@ -167,6 +167,33 @@ class TestCI(unittest.TestCase):
         self.assertIn('- "dados"', texto)
 
 
+class TestReleaseDoBruto(unittest.TestCase):
+    """A estreia da release não pode depender de o arquivo mudar.
+
+    O passo guardava o ZIP oficial só quando o sha256 do JSON mudava - e o sha
+    não mudou desde ANTES de o passo existir. Resultado: em seis dias nenhuma
+    release nasceu, e o acervo que o README chama de "única cópia de longo
+    prazo do arquivo bruto" ficou vazio. Pior: o caminho de recuperação do
+    render.yml procura a última release `bruto-*` quando o cache do
+    completo.json não volta, e sem ela morre - as duas pernas da saída de
+    emergência caíam no mesmo cenário.
+    """
+
+    def test_o_gate_nao_mora_no_if_do_passo(self):
+        # No `if:` do passo, "o sha mudou" é uma porta fechada: o passo nem
+        # roda, e não há como perguntar se a release da versão corrente já
+        # existe. A decisão tem de ficar no corpo, onde o `gh release view`
+        # alcança.
+        texto = _ler("coletar.yml")
+        i = texto.index("- name: Guardar o bruto como release")
+        linha_if = re.search(r"^\s*if: (.+)$", texto[i:], re.M).group(1)
+        self.assertNotIn("bruto_novo", linha_if)
+        # E o corpo continua sabendo do sha: o que muda é onde ele decide.
+        corpo = _bloco_run("coletar.yml", "Guardar o bruto como release")
+        self.assertIn("BRUTO_NOVO", corpo)
+        self.assertIn("gh release view", corpo)
+
+
 class TestConferenciaPosDeploy(unittest.TestCase):
     """A conferência espera a borda do Pages, e as duas cópias não divergem.
 

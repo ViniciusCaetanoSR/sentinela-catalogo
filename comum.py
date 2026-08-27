@@ -223,6 +223,7 @@ CONFIG_PADRAO = {
     "goatcounter_code": "",
     "dominio": "",
     "indexnow_key": "",
+    "google_verificacao": "",
 }
 
 

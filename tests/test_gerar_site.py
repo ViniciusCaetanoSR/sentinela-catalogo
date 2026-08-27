@@ -248,6 +248,7 @@ class TestConfig(unittest.TestCase):
             "goatcounter_code",
             "dominio",
             "indexnow_key",
+            "google_verificacao",
         }
         real = set(comum.carregar_config(comum.padrao().config))
         self.assertTrue(esperado <= real, f"faltam {esperado - real}")

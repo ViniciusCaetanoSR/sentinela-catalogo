@@ -227,6 +227,7 @@ Cada snapshot declara o `schema` do seu formato (`coletor.SCHEMA`, hoje **2**). 
 | `goatcounter_code` | `""` | sem analítica; zero cadastro não distingue "ninguém quer" de "ninguém viu" |
 | `dominio` | `""` | sem `CNAME`, ou seja, sem domínio próprio |
 | `indexnow_key` | `""` | sem arquivo de chave; o passo de ping do workflow roda, mas `indexnow.py` encerra cedo sem tocar a rede |
+| `google_verificacao` | `""` | sem arquivo de verificação; a propriedade do Search Console não pode ser criada, e sem ela não há como submeter o sitemap nem ver cobertura. Guarde o NOME do arquivo que o Google entrega (`google….html`) — o conteúdo o gerador monta |
 
 Com domínio próprio, deixe `base_path` vazio e preencha `dominio`. Isso também é o que faz o `robots.txt` funcionar: em Pages de projeto ele é servido sob `/<repo>/robots.txt`, e crawler só lê na raiz da origem — que pertence à GitHub, não a você.
 

@@ -223,7 +223,7 @@ jobs:
       # único lugar de onde dá para reapurar um dia, já que a Receita não
       # serve versões passadas. Nunca derruba o dia (continue-on-error).
       - name: Guardar o bruto como release
-        if: steps.hoje.outputs.pular != 'true' && steps.coleta.outputs.bruto_novo == 'true'
+        if: steps.hoje.outputs.pular != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -231,9 +231,22 @@ jobs:
           DATA: ${{ steps.coleta.outputs.data }}
           VERSAO: ${{ steps.coleta.outputs.versao }}
           SHA: ${{ steps.coleta.outputs.sha }}
+          BRUTO_NOVO: ${{ steps.coleta.outputs.bruto_novo }}
         run: |
           tag="bruto-$VERSAO"
-          if ! gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+          # A decisão saiu do `if:` do passo e veio para cá por causa de um
+          # furo de bootstrap: a condição era só "o sha do JSON mudou", e o
+          # sha não muda desde ANTES deste passo existir - então a primeira
+          # release nunca nascia, e o acervo que o README promete ficou vazio.
+          # Não é um caso de borda: enquanto a Receita não republicar o
+          # arquivo, todo dia cai aqui. Agora a versão corrente sempre ganha
+          # release; o que sai cedo é a repetição, não a estreia.
+          if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+            if [ "$BRUTO_NOVO" != "true" ]; then
+              echo "release $tag já existe e o sha do JSON não mudou; nada a fazer"
+              exit 0
+            fi
+          else
             gh release create "$tag" --repo "$REPO" \
               --title "Arquivo oficial, versão $VERSAO" \
               --notes "sha256 do JSON descompactado: $SHA. Coletado em $DATA."

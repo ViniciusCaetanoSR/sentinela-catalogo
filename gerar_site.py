@@ -2702,6 +2702,27 @@ def gerar_indexnow(build):
         escrever(build, chave + ".txt", chave)
 
 
+def gerar_verificacao(build):
+    """Arquivo de verificação do Search Console, no molde do IndexNow.
+
+    Tem de nascer do build: gerar() apaga site/ inteiro a cada rodada, então
+    um arquivo largado ali à mão não sobrevive ao dia seguinte.
+
+    E é o método que sobra. O site é Pages de repositório de projeto, servido
+    sob viniciuscaetanosr.github.io/<repo>/ - um subdomínio compartilhado, que
+    está na Public Suffix List. Verificação por DNS exige um TXT na zona de
+    github.io, que é da GitHub e não sua; a propriedade tem de ser de PREFIXO
+    DE URL, e o arquivo HTML é o caminho direto para ela.
+
+    Guarda-se só o nome do arquivo no config: o conteúdo que o Google entrega
+    é uma linha com o próprio nome, então derivá-lo evita ter duas coisas para
+    manter em sincronia.
+    """
+    arquivo = build.cfg.get("google_verificacao")
+    if arquivo:
+        escrever(build, arquivo, "google-site-verification: " + arquivo)
+
+
 def gerar_feed(build):
     """RSS das viradas agendadas.
 
@@ -3071,6 +3092,7 @@ def gerar(build):
     gerar_fontes(build)
     gerar_cname(build)
     gerar_indexnow(build)
+    gerar_verificacao(build)
     datas, mudadas, rebuild = calcular_lastmod(
         build.lastmod_anterior,
         build.paginas,
