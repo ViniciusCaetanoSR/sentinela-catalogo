@@ -30,6 +30,8 @@ jobs:
     # não vem de uma coleta: é a do ultimo.json que este render usou.
     outputs:
       data: ${{ steps.site.outputs.data }}
+      # A impressão digital do build - ver o mesmo output no coletar.yml.
+      gerado_em: ${{ steps.site.outputs.gerado_em }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -128,6 +130,8 @@ jobs:
           ultimo = os.path.join(os.environ["DIR_DADOS"], "ultimo.json")
           with open(ultimo, encoding="utf-8") as f:
               print("data=" + json.load(f)["data_referencia"])
+          with open("site/status.json", encoding="utf-8") as f:
+              print("gerado_em=" + json.load(f)["gerado_em"])
           PY
 
       # Mesmo padrão do coletar.yml: lastmod.json é derivado, não
@@ -168,7 +172,9 @@ jobs:
   publicar:
     needs: [render]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Cobre o deploy (que tem teto próprio de 10 min) mais os 12 min que a
+    # conferência pode passar esperando a borda do Pages.
+    timeout-minutes: 25
     permissions:
       pages: write
       id-token: write
@@ -193,10 +199,15 @@ jobs:
         env:
           URL: ${{ steps.deploy.outputs.page_url }}
           DATA: ${{ needs.render.outputs.data }}
+          GERADO_EM: ${{ needs.render.outputs.gerado_em }}
           # O mesmo 5000 do piso absoluto de NCMs no portão do coletor
           # (coletor.PISO["ncms"]): o site tem ~11 mil páginas, e abaixo
           # disso alguma coisa desabou entre a apuração e o deploy.
           PISO_PAGINAS: "5000"
+          # Acima dos 600s de max-age com que a borda serve o status.json:
+          # passado o TTL ela é obrigada a revalidar na origem, e o que não
+          # bateu até lá deixou de ser explicável por cache.
+          TETO_ESPERA: "720"
         run: |
           # page_url já termina em "/"; sem podar sairia "//status.json".
           base="${URL%/}/"
@@ -205,11 +216,42 @@ jobs:
           falhou=0
           erro() { echo "::error::$1"; falhou=1; }
 
-          # --retry-all-errors: entre o deploy responder e o CDN do Pages
-          # servir o build novo há uma janela de alguns segundos.
-          curl -fsS --retry 5 --retry-delay 10 --retry-all-errors \
-            -o "$STATUS" "${base}status.json" \
-            || erro "${base}status.json não respondeu"
+          # A borda do Pages serve o status.json com Cache-Control: max-age=600
+          # e ignora TANTO cache-buster na query QUANTO Cache-Control: no-cache
+          # - os três foram medidos contra o site no ar. Entre o deploy
+          # responder e a borda entregar o build novo não existe atalho: só
+          # esperar. O --retry do curl não cobria isso, porque ele reage a
+          # ERRO, e uma borda velha responde 200 com o build ANTERIOR: foi o
+          # alarme falso de 24, 25 e 26/08 - três dias vermelhos em que o dado
+          # foi gravado e o site publicado. Aqui o laço relê até o gerado_em no
+          # ar ser o desta run: a data de referência repete entre runs do mesmo
+          # dia, o gerado_em não.
+          if [ -z "$GERADO_EM" ]; then
+            echo "::error::gerado_em não chegou do job que gerou o site"
+            exit 1
+          fi
+          lido=""
+          inicio=$SECONDS
+          tentativa=0
+          while :; do
+            tentativa=$((tentativa + 1))
+            if curl -fsS --retry 3 --retry-delay 5 --retry-all-errors \
+                 -o "$STATUS" "${base}status.json"; then
+              lido=$(python3 -c "import json,os;print(json.load(open(os.environ['STATUS'],encoding='utf-8')).get('gerado_em',''))") || lido="(ilegivel)"
+            else
+              lido="(sem resposta)"
+            fi
+            if [ "$lido" = "$GERADO_EM" ]; then
+              break
+            fi
+            if [ $((SECONDS - inicio)) -ge "$TETO_ESPERA" ]; then
+              erro "o Pages não serviu o build desta run em ${TETO_ESPERA}s (no ar: ${lido:-vazio}; esperado: $GERADO_EM). Passou do TTL de 600s da borda, então deixou de ser explicável por cache."
+              exit "$falhou"
+            fi
+            echo "ainda é o build anterior (gerado_em=${lido:-vazio}); nova leitura em 15s (tentativa $tentativa)"
+            sleep 15
+          done
+          echo "a borda entregou o build desta run em $((SECONDS - inicio))s, na tentativa $tentativa"
 
           # python3, e não `python`: este job não roda actions/setup-python
           # (só faz o deploy), então não existe o atalho que ela instala.

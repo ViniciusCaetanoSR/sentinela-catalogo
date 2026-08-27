@@ -50,6 +50,28 @@ def _linhas_vivas(texto):
     return [linha for linha in texto.split("\n") if not linha.lstrip().startswith("#")]
 
 
+# A indentação do corpo de um `run: |` dentro de um passo, neste projeto.
+RECUO_DO_RUN = " " * 10
+
+
+def _bloco_run(nome, passo):
+    """O shell de um passo, extraído pela regra do bloco literal do YAML.
+
+    PyYAML não é biblioteca padrão e este projeto não instala nada em runtime,
+    então a extração é textual: o bloco vai até a primeira linha não vazia com
+    indentação menor que a do corpo, que é exatamente o que o YAML diz.
+    """
+    texto = _ler(nome)
+    inicio = texto.index(f"- name: {passo}")
+    corpo = texto[texto.index("run: |", inicio) :].split("\n")[1:]
+    linhas = []
+    for linha in corpo:
+        if linha.strip() and not linha.startswith(RECUO_DO_RUN):
+            break
+        linhas.append(linha)
+    return "\n".join(linhas).rstrip() + "\n"
+
+
 class TestOndeVaiODado(unittest.TestCase):
     def test_nenhum_caminho_de_dados_fixo(self):
         for nome in COM_DADOS:
@@ -143,6 +165,79 @@ class TestCI(unittest.TestCase):
         texto = _ler("ci.yml")
         self.assertIn("branches-ignore:", texto)
         self.assertIn('- "dados"', texto)
+
+
+class TestConferenciaPosDeploy(unittest.TestCase):
+    """A conferência espera a borda do Pages, e as duas cópias não divergem.
+
+    O passo lê o status.json pela URL PÚBLICA, e a borda do Pages serve esse
+    arquivo com Cache-Control: max-age=600 ignorando tanto cache-buster na
+    query quanto Cache-Control: no-cache - os três foram medidos contra o site
+    no ar. Entre o deploy responder e a borda entregar o build novo não existe
+    atalho: só esperar. Um `curl --retry` NÃO cobre isso, porque ele reage a
+    ERRO, e uma borda velha responde 200 com o build anterior.
+
+    Foi o alarme falso de 24, 25 e 26/08: três runs vermelhas em dias que
+    gravaram o dado e publicaram o site. Um alerta que grita falso todo dia é
+    um alerta que se aprende a ignorar - por isso estas invariantes.
+    """
+
+    PASSO = "Conferir o que foi publicado"
+    ARQUIVOS = ("coletar.yml", "render.yml")
+    # O max-age com que a borda do Pages serve o status.json, medido.
+    TTL_DA_BORDA = 600
+    # O teto próprio do actions/deploy-pages, que roda no mesmo job.
+    TETO_DO_DEPLOY = 600
+
+    def _teto_de_espera(self, nome):
+        achado = re.search(r'TETO_ESPERA:\s*"(\d+)"', _ler(nome))
+        self.assertIsNotNone(achado, f"{nome}: TETO_ESPERA não está definido")
+        return int(achado.group(1))
+
+    def test_as_duas_copias_sao_identicas(self):
+        """A duplicação é deliberada; divergir em silêncio não é.
+
+        O job `publicar` não faz checkout (só roda o deploy), então uma
+        composite action obrigaria a fazer um - a razão está escrita no
+        próprio render.yml. O preço é este teste: consertar uma cópia e
+        esquecer a outra deixa metade do defeito de pé, e a metade que fica em
+        render.yml é a silenciosa (lá a data esperada é a que já está no ar,
+        então uma leitura velha PASSA - verde falso em vez de vermelho falso).
+        """
+        a, b = (_bloco_run(nome, self.PASSO) for nome in self.ARQUIVOS)
+        self.assertEqual(a, b)
+
+    def test_rele_ate_a_borda_entregar_o_build_desta_run(self):
+        for nome in self.ARQUIVOS:
+            with self.subTest(nome):
+                bloco = _bloco_run(nome, self.PASSO)
+                # Um curl único, por mais --retry que leve, volta a confundir
+                # borda velha com deploy quebrado.
+                self.assertIn("while :; do", bloco)
+                self.assertIn("sleep", bloco)
+                # E o que ele compara é a impressão digital do build, não a
+                # data de referência: a data repete entre runs do mesmo dia.
+                self.assertIn("$GERADO_EM", bloco)
+
+    def test_o_teto_de_espera_passa_do_ttl_da_borda(self):
+        """Esperar menos que o max-age volta a confundir cache com defeito.
+
+        Passado o TTL a borda é obrigada a revalidar na origem: o que não
+        bateu até lá deixou de ter cache como explicação.
+        """
+        for nome in self.ARQUIVOS:
+            with self.subTest(nome):
+                self.assertGreater(self._teto_de_espera(nome), self.TTL_DA_BORDA)
+
+    def test_o_job_de_publicar_cabe_na_espera(self):
+        """Sem folga no job, o runner mata o passo no meio da contagem."""
+        for nome in self.ARQUIVOS:
+            with self.subTest(nome):
+                texto = _ler(nome)
+                depois = texto[texto.index("\n  publicar:\n") :]
+                minutos = int(re.search(r"timeout-minutes:\s*(\d+)", depois).group(1))
+                preciso = self._teto_de_espera(nome) + self.TETO_DO_DEPLOY
+                self.assertGreaterEqual(minutos * 60, preciso)
 
 
 if __name__ == "__main__":
