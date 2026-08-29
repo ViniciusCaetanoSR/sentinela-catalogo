@@ -2700,43 +2700,6 @@
    "total_ncms": 2
   },
   {
-   "codigo": "ATT_11820",
-   "definicao": null,
-   "dominio": [
-    {
-     "codigo": "01",
-     "descricao": "Cota de importação estabelecida conforme Resolução Gecex nº 600/2024"
-    },
-    {
-     "codigo": "99",
-     "descricao": "Demais"
-    }
-   ],
-   "dominio_total": 2,
-   "forma_preenchimento": "LISTA_ESTATICA",
-   "multivalorado": null,
-   "nas_viradas": false,
-   "ncms": [
-    "7208.37.00",
-    "7208.38.90",
-    "7208.39.10",
-    "7208.39.90",
-    "7209.16.00",
-    "7209.17.00",
-    "7210.49.10",
-    "7210.61.00",
-    "7213.91.90",
-    "7305.11.00",
-    "7305.12.00"
-   ],
-   "nome": "Detalhamento",
-   "orgaos": [
-    "DECEX"
-   ],
-   "orientacao": null,
-   "total_ncms": 11
-  },
-  {
    "codigo": "ATT_1187",
    "definicao": "Lista de destaques de exportação da NCM 84798999",
    "dominio": [
@@ -22470,12 +22433,19 @@
   {
    "atributos": [
     {
-     "codigo": "ATT_11820",
+     "codigo": "ATT_15540",
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
-     "nome": "Detalhamento",
-     "total_ncms": 11
-    },
+     "nome": "Código de Class. Tributária (cClassTrib)",
+     "total_ncms": 10516
+    }
+   ],
+   "orgao": "CONFAZ",
+   "slug": "confaz",
+   "total_atributos": 1
+  },
+  {
+   "atributos": [
     {
      "codigo": "ATT_2095",
      "forma_preenchimento": "LISTA_ESTATICA",
@@ -22486,20 +22456,6 @@
    ],
    "orgao": "DECEX",
    "slug": "decex",
-   "total_atributos": 2
-  },
-  {
-   "atributos": [
-    {
-     "codigo": "ATT_15540",
-     "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": false,
-     "nome": "Código de Class. Tributária (cClassTrib)",
-     "total_ncms": 10516
-    }
-   ],
-   "orgao": "CONFAZ",
-   "slug": "confaz",
    "total_atributos": 1
   },
   {
@@ -22924,5 +22880,5 @@
   "ATT_9898",
   "ATT_9901"
  ],
- "versao": "346"
+ "versao": "347"
 }
