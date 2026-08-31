@@ -4430,7 +4430,7 @@
    "dominio_total": 4,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "3102.10.10",
     "3213.10.00",
@@ -4498,7 +4498,7 @@
     "INMETRO"
    ],
    "orientacao": "Todas as opções estão sujeitas a monitoramento pelo Inmetro. Caso considere que o produto a ser importado está fora do escopo de regulamentação do Inmetro, sinalize a opção 04.",
-   "total_ncms": 250
+   "total_ncms": 248
   },
   {
    "codigo": "ATT_13220",
@@ -4563,7 +4563,7 @@
    "dominio_total": 4,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "3922.10.00",
     "6301.10.00",
@@ -7261,7 +7261,7 @@
     "MAPA"
    ],
    "orientacao": "Município do destino da mercadoria após liberação do recinto alfandegado, ou em caso de entrega antecipada.",
-   "total_ncms": 3472
+   "total_ncms": 3475
   },
   {
    "codigo": "ATT_14501",
@@ -11065,7 +11065,7 @@
    "dominio_total": 2,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "8609.00.00"
    ],
@@ -11100,7 +11100,7 @@
    "dominio_total": 4,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "8415.10.90"
    ],
@@ -11127,7 +11127,7 @@
    "dominio_total": 2,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "8418.69.20"
    ],
@@ -11154,7 +11154,7 @@
    "dominio_total": 2,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "8418.69.91"
    ],
@@ -11181,7 +11181,7 @@
    "dominio_total": 2,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "8436.21.00",
     "8436.29.00"
@@ -12918,11 +12918,19 @@
      "descricao": "Máquina elétrica de gelo abrangida pela norma IEC 60335-2-24"
     },
     {
+     "codigo": "97",
+     "descricao": "Outros aparelhos de refrigeração para uso doméstico e similar abrangidos pela norma IEC 60335-2-24"
+    },
+    {
+     "codigo": "98",
+     "descricao": "Outros aparelhos de refrigeração para uso comercial abrangidos pela norma IEC 60335-2-24 ou pela norma IEC 60335-2-89"
+    },
+    {
      "codigo": "999",
      "descricao": "Outros"
     }
    ],
-   "dominio_total": 4,
+   "dominio_total": 6,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
    "nas_viradas": false,
@@ -19341,14 +19349,14 @@
     {
      "codigo": "ATT_13200",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Referência de licenciamento Inmetro",
-     "total_ncms": 250
+     "total_ncms": 248
     },
     {
      "codigo": "ATT_13240",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Referência de licenciamento Inmetro",
      "total_ncms": 131
     },
@@ -19635,7 +19643,7 @@
     {
      "codigo": "ATT_17301",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Detalhamento",
      "total_ncms": 2
     },
@@ -19978,28 +19986,28 @@
     {
      "codigo": "ATT_17200",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Detalhamento",
      "total_ncms": 1
     },
     {
      "codigo": "ATT_17220",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Detalhamento",
      "total_ncms": 1
     },
     {
      "codigo": "ATT_17280",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Detalhamento",
      "total_ncms": 1
     },
     {
      "codigo": "ATT_17300",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Detalhamento",
      "total_ncms": 1
     },
@@ -20190,7 +20198,7 @@
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
      "nome": "Município do destino final",
-     "total_ncms": 3472
+     "total_ncms": 3475
     },
     {
      "codigo": "ATT_12040",
@@ -21432,17 +21440,17 @@
      "total_ncms": 3485
     },
     {
-     "codigo": "ATT_14303",
-     "forma_preenchimento": "TEXTO",
-     "nas_viradas": false,
-     "nome": "Número de Registro do Fabricante no MAPA",
-     "total_ncms": 3472
-    },
-    {
      "codigo": "ATT_14500",
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
      "nome": "Município do destino final",
+     "total_ncms": 3475
+    },
+    {
+     "codigo": "ATT_14303",
+     "forma_preenchimento": "TEXTO",
+     "nas_viradas": false,
+     "nome": "Número de Registro do Fabricante no MAPA",
      "total_ncms": 3472
     },
     {
@@ -22880,5 +22888,5 @@
   "ATT_9898",
   "ATT_9901"
  ],
- "versao": "348"
+ "versao": "349"
 }
