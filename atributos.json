@@ -12995,7 +12995,7 @@
    "ncms": [
     "8504.21.00"
    ],
-   "nome": "Destaque LI",
+   "nome": "Detalhamento",
    "orgaos": [
     "INMETRO"
    ],
@@ -20176,7 +20176,7 @@
      "codigo": "ATT_2548",
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
-     "nome": "Destaque LI",
+     "nome": "Detalhamento",
      "total_ncms": 1
     },
     {
@@ -22888,5 +22888,5 @@
   "ATT_9898",
   "ATT_9901"
  ],
- "versao": "349"
+ "versao": "350"
 }
