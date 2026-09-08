@@ -3445,15 +3445,11 @@
      "descricao": "Tubos de aço carbono para usos comuns na condução de fluidos"
     },
     {
-     "codigo": "02",
-     "descricao": "Tubos de aço carbono para usos na condução de fluidos em altas temperaturas"
-    },
-    {
      "codigo": "99",
      "descricao": "Outros"
     }
    ],
-   "dominio_total": 3,
+   "dominio_total": 2,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
    "nas_viradas": false,
@@ -4167,11 +4163,15 @@
      "descricao": "Veículos sem pedais (Carrinhos baixos sem pedais que se movimentam pelo impulso dos pés das crianças. Excluem-se desta definição as bicicletas sem pedais)"
     },
     {
+     "codigo": "13",
+     "descricao": "Veículos com pedais, triciclos, karts e \"tico-ticos\" (Veículos com pedais imitando o real, motos e bicicletas com três rodas e karts para crianças)"
+    },
+    {
      "codigo": "99",
      "descricao": "Outros"
     }
    ],
-   "dominio_total": 12,
+   "dominio_total": 13,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
    "nas_viradas": false,
@@ -4498,7 +4498,7 @@
     "INMETRO"
    ],
    "orientacao": "Todas as opções estão sujeitas a monitoramento pelo Inmetro. Caso considere que o produto a ser importado está fora do escopo de regulamentação do Inmetro, sinalize a opção 04.",
-   "total_ncms": 248
+   "total_ncms": 246
   },
   {
    "codigo": "ATT_13220",
@@ -4677,12 +4677,12 @@
    "ncms": [
     "7315.12.10",
     "7321.11.00",
-    "8401.20.00",
     "8409.99.71",
     "8409.99.79",
     "8414.51.10",
     "8414.51.20",
     "8418.10.00",
+    "8418.21.00",
     "8418.29.00",
     "8418.30.00",
     "8418.40.00",
@@ -4707,6 +4707,7 @@
     "8450.12.00",
     "8450.19.00",
     "8450.20.90",
+    "8451.21.00",
     "8504.21.00",
     "8504.40.10",
     "8507.10.10",
@@ -4733,15 +4734,14 @@
     "9025.80.00",
     "9027.10.00",
     "9027.89.99",
-    "9028.10.11",
-    "9028.10.19"
+    "9028.10.11"
    ],
    "nome": "Referência de licenciamento Inmetro",
    "orgaos": [
     "INMETRO"
    ],
    "orientacao": "Todas as opções estão sujeitas a monitoramento pelo Inmetro. Caso considere que o produto a ser importado está fora do escopo de regulamentação do Inmetro, sinalize a opção 04.",
-   "total_ncms": 75
+   "total_ncms": 76
   },
   {
    "codigo": "ATT_13260",
@@ -19351,7 +19351,7 @@
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
      "nome": "Referência de licenciamento Inmetro",
-     "total_ncms": 248
+     "total_ncms": 246
     },
     {
      "codigo": "ATT_13240",
@@ -19365,7 +19365,7 @@
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": true,
      "nome": "Referência de licenciamento Inmetro",
-     "total_ncms": 75
+     "total_ncms": 76
     },
     {
      "codigo": "ATT_12960",
@@ -22888,5 +22888,5 @@
   "ATT_9898",
   "ATT_9901"
  ],
- "versao": "350"
+ "versao": "351"
 }
