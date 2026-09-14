@@ -4502,7 +4502,7 @@
     "INMETRO"
    ],
    "orientacao": "Todas as opções estão sujeitas a monitoramento pelo Inmetro. Caso considere que o produto a ser importado está fora do escopo de regulamentação do Inmetro, sinalize a opção 04.",
-   "total_ncms": 246
+   "total_ncms": 245
   },
   {
    "codigo": "ATT_13220",
@@ -4677,7 +4677,7 @@
    "dominio_total": 8,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
-   "nas_viradas": true,
+   "nas_viradas": false,
    "ncms": [
     "7315.12.10",
     "7321.11.00",
@@ -5731,11 +5731,15 @@
      "descricao": "Carregador de baterias automotivas de corrente nominal máximos de 30 A, tensão de saída de até 15v e massa de até 18 kg abrangido pela norma IEC 60335-2-29"
     },
     {
+     "codigo": "04",
+     "descricao": "Carregadores de baterias, tendo uma saída com extra baixa tensão de segurança e cuja tensãonominal não seja superior a 250V, abrangidos pela IEC 60335-2-29"
+    },
+    {
      "codigo": "99",
      "descricao": "Outros"
     }
    ],
-   "dominio_total": 4,
+   "dominio_total": 5,
    "forma_preenchimento": "LISTA_ESTATICA",
    "multivalorado": null,
    "nas_viradas": false,
@@ -13514,7 +13518,6 @@
    "nas_viradas": false,
    "ncms": [
     "8428.39.90",
-    "8428.90.90",
     "8474.20.90",
     "8501.52.90"
    ],
@@ -13523,7 +13526,7 @@
     "INMETRO"
    ],
    "orientacao": "Verifique junto à Portaria nº 148/2022 e suas alterações posteriores se o produto está sujeito à regulamentação do Inmetro por meio do endereço http://www.inmetro.gov.br/legislacao/",
-   "total_ncms": 4
+   "total_ncms": 3
   },
   {
    "codigo": "ATT_2606",
@@ -19359,7 +19362,7 @@
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
      "nome": "Referência de licenciamento Inmetro",
-     "total_ncms": 246
+     "total_ncms": 245
     },
     {
      "codigo": "ATT_13240",
@@ -19371,7 +19374,7 @@
     {
      "codigo": "ATT_13241",
      "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": true,
+     "nas_viradas": false,
      "nome": "Referência de licenciamento Inmetro",
      "total_ncms": 76
     },
@@ -19453,13 +19456,6 @@
      "total_ncms": 4
     },
     {
-     "codigo": "ATT_2605",
-     "forma_preenchimento": "LISTA_ESTATICA",
-     "nas_viradas": false,
-     "nome": "Detalhamento",
-     "total_ncms": 4
-    },
-    {
      "codigo": "ATT_2606",
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
@@ -19503,6 +19499,13 @@
     },
     {
      "codigo": "ATT_2327",
+     "forma_preenchimento": "LISTA_ESTATICA",
+     "nas_viradas": false,
+     "nome": "Detalhamento",
+     "total_ncms": 3
+    },
+    {
+     "codigo": "ATT_2605",
      "forma_preenchimento": "LISTA_ESTATICA",
      "nas_viradas": false,
      "nome": "Detalhamento",
@@ -22896,5 +22899,5 @@
   "ATT_9898",
   "ATT_9901"
  ],
- "versao": "353"
+ "versao": "354"
 }
